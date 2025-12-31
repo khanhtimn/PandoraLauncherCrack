@@ -42,6 +42,8 @@ pub struct Launcher {
 
 #[derive(thiserror::Error, Debug)]
 pub enum LaunchError {
+    #[error("Failed to perform I/O operation:\n{0}")]
+    IoError(#[from] std::io::Error),
     #[error("Failed to load java runtime:\n{0}")]
     LoadJavaRuntimeError(#[from] LoadJavaRuntimeError),
     #[error("Failed to load game assets:\n{0}")]
@@ -213,7 +215,7 @@ impl Launcher {
             return Err(LaunchError::CancelledByUser);
         }
 
-        let child = launch_context.launch(&version_info);
+        let child = launch_context.launch(&version_info)?;
 
         launch_tracker.add_count(1);
 
@@ -1373,7 +1375,7 @@ pub struct LaunchContext {
 }
 
 impl LaunchContext {
-    pub fn launch(mut self, version_info: &MinecraftVersion) -> std::process::Child {
+    pub fn launch(mut self, version_info: &MinecraftVersion) -> std::io::Result<std::process::Child> {
         let mut command = std::process::Command::new(&*self.java_path);
 
         command.current_dir(&self.game_dir);
@@ -1386,11 +1388,19 @@ impl LaunchContext {
         if !self.add_mods.is_empty() {
             // todo: forge?
 
-            let joined = std::env::join_paths(&self.add_mods).unwrap();
+            let add_mods_path = self.temp_dir.join("pandora_add_mods_to_fabric.txt");
+
+            let mut add_mods_content = OsString::new();
+            for mod_to_add in &self.add_mods {
+                add_mods_content.push(mod_to_add);
+                add_mods_content.push("\n");
+            }
+
+            crate::write_safe(&add_mods_path, add_mods_content.as_encoded_bytes())?;
 
             let mut add_mods_argument = OsString::new();
-            add_mods_argument.push("-Dfabric.addMods=");
-            add_mods_argument.push(joined);
+            add_mods_argument.push("-Dfabric.addMods=@");
+            add_mods_argument.push(add_mods_path);
             command.arg(add_mods_argument);
         }
 
@@ -1414,7 +1424,7 @@ impl LaunchContext {
 
         command.arg("com.moulberry.pandora.LaunchWrapper");
 
-        let mut child = command.spawn().unwrap();
+        let mut child = command.spawn()?;
 
         let mut stdin = child.stdin.take().expect("stdin present");
 
@@ -1439,10 +1449,10 @@ impl LaunchContext {
         stdin_arguments.push_str(version_info.main_class.as_str());
         stdin_arguments.push('\n');
 
-        stdin.write_all(stdin_arguments.as_bytes()).unwrap();
-        stdin.flush().unwrap();
+        stdin.write_all(stdin_arguments.as_bytes())?;
+        stdin.flush()?;
 
-        child
+        Ok(child)
     }
 
     fn process_arguments(&self, arguments: &[LaunchArgument], handler: &mut impl FnMut(&OsStr)) {
