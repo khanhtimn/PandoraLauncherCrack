@@ -13,7 +13,7 @@ pub fn create_wrapper(temp_dir: &Path) -> PathBuf {
     let launch_wrapper = temp_dir.join(format!("LaunchWrapper-{}.jar", hash));
 
     if !launch_wrapper.exists() {
-        let _ = std::fs::write(&launch_wrapper, LAUNCH_WRAPPER);
+        _ = crate::write_safe(&launch_wrapper, LAUNCH_WRAPPER);
     }
 
     launch_wrapper
