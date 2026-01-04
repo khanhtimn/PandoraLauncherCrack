@@ -1423,6 +1423,13 @@ impl LaunchContext {
             command.arg(format!("-Xms{}m", memory.min));
             command.arg(format!("-Xmx{}m", memory.max.max(memory.min).max(128)));
         }
+        if let Some(jvm_flags) = &self.configuration.jvm_flags && jvm_flags.enabled {
+            if let Ok(split) = shell_words::split(&jvm_flags.flags) {
+                command.args(split);
+            } else {
+                command.args(jvm_flags.flags.split_whitespace());
+            }
+        }
 
         command.arg("com.moulberry.pandora.LaunchWrapper");
 

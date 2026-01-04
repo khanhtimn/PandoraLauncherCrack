@@ -72,6 +72,13 @@ impl BackendState {
                     });
                 }
             },
+            MessageToBackend::SetInstanceJvmFlags { id, jvm_flags } => {
+                if let Some(instance) = self.instance_state.write().instances.get_mut(id) {
+                    instance.configuration.modify(|configuration| {
+                        configuration.jvm_flags = Some(jvm_flags);
+                    });
+                }
+            }
             MessageToBackend::KillInstance { id } => {
                 if let Some(instance) = self.instance_state.write().instances.get_mut(id) {
                     if let Some(mut child) = instance.child.take() {

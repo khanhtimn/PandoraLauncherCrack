@@ -906,6 +906,7 @@ impl BackendState {
             minecraft_version: Ustr::from(version),
             loader,
             memory: None,
+            jvm_flags: None,
         };
 
         let info_path = instance_dir.join("info_v1.json");

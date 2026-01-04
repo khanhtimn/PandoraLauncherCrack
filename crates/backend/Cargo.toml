@@ -46,7 +46,8 @@ strum.workspace = true
 rand.workspace = true
 rayon.workspace = true
 rc-zip-sync.workspace = true
-relative-path = "2.0.1"
+relative-path.workspace = true
+shell-words.workspace = true
 
 [target.'cfg(target_os = "windows")'.dependencies]
 junction = "1.3.0"

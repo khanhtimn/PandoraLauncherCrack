@@ -10,7 +10,7 @@ use gpui_component::{
     button::{Button, ButtonVariants}, checkbox::Checkbox, h_flex, input::{Input, InputEvent, InputState, NumberInput, NumberInputEvent}, list::{ListDelegate, ListItem, ListState}, select::{Select, SelectEvent, SelectState}, spinner::Spinner, switch::Switch, v_flex, ActiveTheme as _, Disableable, Icon, IconName, IndexPath, Sizable
 };
 use rustc_hash::FxHashSet;
-use schema::instance::InstanceMemoryConfiguration;
+use schema::instance::{InstanceJvmFlagsConfiguration, InstanceMemoryConfiguration};
 
 use crate::{component::{error_alert::ErrorAlert, named_dropdown::{NamedDropdown, NamedDropdownItem}, readonly_text_field::{ReadonlyTextField, ReadonlyTextFieldWithControls}}, entity::instance::InstanceEntry, png_render_cache, root};
 
@@ -28,6 +28,8 @@ pub struct InstanceSettingsSubpage {
     memory_override_enabled: bool,
     memory_min_input_state: Entity<InputState>,
     memory_max_input_state: Entity<InputState>,
+    jvm_flags_enabled: bool,
+    jvm_flags_input_state: Entity<InputState>,
     new_name_change_state: NewNameChangeState,
     backend_handle: BackendHandle,
 }
@@ -46,6 +48,7 @@ impl InstanceSettingsSubpage {
         let instance_id = entry.id;
 
         let memory = entry.configuration.memory.unwrap_or_default();
+        let jvm_flags = entry.configuration.jvm_flags.clone().unwrap_or_default();
 
         let memory_min_input_state = cx.new(|cx| {
             InputState::new(window, cx).default_value(memory.min.to_string())
@@ -58,6 +61,11 @@ impl InstanceSettingsSubpage {
         cx.subscribe_in(&memory_max_input_state, window, Self::on_memory_step).detach();
         cx.subscribe(&memory_max_input_state, Self::on_memory_changed).detach();
 
+        let jvm_flags_input_state = cx.new(|cx| {
+            InputState::new(window, cx).auto_grow(1, 8).default_value(jvm_flags.flags)
+        });
+        cx.subscribe(&jvm_flags_input_state, Self::on_jvm_flags_changed).detach();
+
         Self {
             instance: instance.clone(),
             instance_id,
@@ -65,6 +73,8 @@ impl InstanceSettingsSubpage {
             memory_override_enabled: memory.enabled,
             memory_min_input_state,
             memory_max_input_state,
+            jvm_flags_enabled: jvm_flags.enabled,
+            jvm_flags_input_state,
             new_name_change_state: NewNameChangeState::NoChange,
             backend_handle,
         }
@@ -153,6 +163,29 @@ impl InstanceSettingsSubpage {
             max
         }
     }
+
+    pub fn on_jvm_flags_changed(
+        &mut self,
+        _: Entity<InputState>,
+        event: &InputEvent,
+        cx: &mut Context<Self>,
+    ) {
+        if let InputEvent::Change = event {
+            self.backend_handle.send(MessageToBackend::SetInstanceJvmFlags {
+                id: self.instance_id,
+                jvm_flags: self.get_jvm_flags_configuration(cx)
+            });
+        }
+    }
+
+    fn get_jvm_flags_configuration(&self, cx: &App) -> InstanceJvmFlagsConfiguration {
+        let flags = self.jvm_flags_input_state.read(cx).value();
+
+        InstanceJvmFlagsConfiguration {
+            enabled: self.jvm_flags_enabled,
+            flags: flags.into(),
+        }
+    }
 }
 
 impl Render for InstanceSettingsSubpage {
@@ -166,6 +199,7 @@ impl Render for InstanceSettingsSubpage {
             .child(div().text_lg().child("Settings"));
 
         let memory_override_enabled = self.memory_override_enabled;
+        let jvm_flags_enabled = self.jvm_flags_enabled;
 
         let content = v_flex()
             .p_4()
@@ -217,6 +251,20 @@ impl Render for InstanceSettingsSubpage {
                     .child(NumberInput::new(&self.memory_max_input_state).max_w_64().small().suffix("MiB").disabled(!memory_override_enabled))
                     .child("Max"))
                 )
+            .child(v_flex()
+                .gap_1()
+                .child(Checkbox::new("jvm_flags").label("Add JVM Flags").checked(jvm_flags_enabled).on_click(cx.listener(|page, value, _, cx| {
+                    if page.jvm_flags_enabled != *value {
+                        page.jvm_flags_enabled = *value;
+                        page.backend_handle.send(MessageToBackend::SetInstanceJvmFlags {
+                            id: page.instance_id,
+                            jvm_flags: page.get_jvm_flags_configuration(cx)
+                        });
+                        cx.notify();
+                    }
+                })))
+                .child(div().max_w_64().child(Input::new(&self.jvm_flags_input_state).disabled(!jvm_flags_enabled)))
+            )
             .child(Button::new("delete").max_w_64().label("Delete this instance").danger().on_click({
                 let instance = self.instance.clone();
                 let backend_handle = self.backend_handle.clone();
