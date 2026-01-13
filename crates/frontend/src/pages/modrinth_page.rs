@@ -1,13 +1,14 @@
-use std::{ops::Range, sync::Arc, time::Duration};
+use std::{ops::Range, sync::{atomic::AtomicBool, Arc}, time::Duration};
 
 use bridge::{instance::InstanceID, meta::MetadataRequest};
 use gpui::{prelude::*, *};
 use gpui_component::{
     breadcrumb::Breadcrumb, button::{Button, ButtonGroup, ButtonVariants}, h_flex, input::{Input, InputEvent, InputState}, notification::NotificationType, scroll::Scrollbar, skeleton::Skeleton, v_flex, ActiveTheme, Icon, IconName, Selectable, StyledExt, WindowExt
 };
-use schema::modrinth::{
+use rustc_hash::FxHashSet;
+use schema::{loader::Loader, modrinth::{
     ModrinthHit, ModrinthProjectType, ModrinthSearchRequest, ModrinthSearchResult, ModrinthSideRequirement
-};
+}};
 
 use crate::{
     component::error_alert::ErrorAlert, entity::{
@@ -26,7 +27,10 @@ pub struct ModrinthSearchPage {
     search_state: Entity<InputState>,
     _search_input_subscription: Subscription,
     _delayed_clear_task: Task<()>,
-    project_type: ModrinthProjectType,
+    filter_project_type: ModrinthProjectType,
+    filter_loaders: FxHashSet<Loader>,
+    filter_categories: FxHashSet<&'static str>,
+    show_categories: Arc<AtomicBool>,
     last_search: Arc<str>,
     scroll_handle: UniformListScrollHandle,
     search_error: Option<SharedString>,
@@ -50,7 +54,10 @@ impl ModrinthSearchPage {
             search_state,
             _search_input_subscription,
             _delayed_clear_task: Task::ready(()),
-            project_type: ModrinthProjectType::Mod,
+            filter_project_type: ModrinthProjectType::Mod,
+            filter_loaders: FxHashSet::default(),
+            filter_categories: FxHashSet::default(),
+            show_categories: Arc::new(AtomicBool::new(false)),
             last_search: Arc::from(""),
             scroll_handle: UniformListScrollHandle::new(),
             search_error: None,
@@ -84,10 +91,11 @@ impl ModrinthSearchPage {
     }
 
     fn set_project_type(&mut self, project_type: ModrinthProjectType, window: &mut Window, cx: &mut Context<Self>) {
-        if self.project_type == project_type {
+        if self.filter_project_type == project_type {
             return;
         }
-        self.project_type = project_type;
+        self.filter_project_type = project_type;
+        self.filter_categories.clear();
         self.search_state.update(cx, |state, cx| {
             let placeholder = match project_type {
                 ModrinthProjectType::Mod => "Search mods...",
@@ -98,6 +106,22 @@ impl ModrinthSearchPage {
             };
             state.set_placeholder(placeholder, window, cx)
         });
+        self.reload(cx);
+    }
+
+    fn set_filter_loaders(&mut self, loaders: FxHashSet<Loader>, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.filter_loaders == loaders {
+            return;
+        }
+        self.filter_loaders = loaders;
+        self.reload(cx);
+    }
+
+    fn set_filter_categories(&mut self, categories: FxHashSet<&'static str>, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.filter_categories == categories {
+            return;
+        }
+        self.filter_categories = categories;
         self.reload(cx);
     }
 
@@ -132,7 +156,7 @@ impl ModrinthSearchPage {
             Some(self.last_search.clone())
         };
 
-        let project_type = match self.project_type {
+        let project_type = match self.filter_project_type {
             ModrinthProjectType::Mod | ModrinthProjectType::Other => "mod",
             ModrinthProjectType::Modpack => "modpack",
             ModrinthProjectType::Resourcepack => "resourcepack",
@@ -141,9 +165,48 @@ impl ModrinthSearchPage {
 
         let offset = if self.pending_clear { 0 } else { self.hits.len() };
 
+        let mut facets = format!("[[\"project_type={}\"]", project_type);
+
+        let is_mod = self.filter_project_type == ModrinthProjectType::Mod && self.filter_project_type == ModrinthProjectType::Modpack;
+        if !self.filter_loaders.is_empty() && is_mod {
+            facets.push_str(",[");
+
+            let mut first = true;
+            for loader in &self.filter_loaders {
+                if first {
+                    first = false;
+                } else {
+                    facets.push(',');
+                }
+                facets.push_str("\"categories:");
+                facets.push_str(loader.as_modrinth_loader().id());
+                facets.push('"');
+            }
+            facets.push(']');
+        }
+
+        if !self.filter_categories.is_empty() {
+            facets.push_str(",[");
+
+            let mut first = true;
+            for category in &self.filter_categories {
+                if first {
+                    first = false;
+                } else {
+                    facets.push(',');
+                }
+                facets.push_str("\"categories:");
+                facets.push_str(*category);
+                facets.push('"');
+            }
+            facets.push(']');
+        }
+
+        facets.push(']');
+
         let request = ModrinthSearchRequest {
             query,
-            facets: Some(format!("[[\"project_type={}\"]]", project_type).into()),
+            facets: Some(facets.into()),
             index: schema::modrinth::ModrinthSearchIndex::Relevance,
             offset,
             limit: 20,
@@ -434,18 +497,18 @@ impl Render for ModrinthSearchPage {
         let type_button_group = ButtonGroup::new("type")
             .layout(Axis::Vertical)
             .outline()
-            .child(Button::new("mods").label("Mods").selected(self.project_type == ModrinthProjectType::Mod))
+            .child(Button::new("mods").label("Mods").selected(self.filter_project_type == ModrinthProjectType::Mod))
             .child(
                 Button::new("modpacks")
                     .label("Modpacks")
-                    .selected(self.project_type == ModrinthProjectType::Modpack),
+                    .selected(self.filter_project_type == ModrinthProjectType::Modpack),
             )
             .child(
                 Button::new("resourcepacks")
                     .label("Resourcepacks")
-                    .selected(self.project_type == ModrinthProjectType::Resourcepack),
+                    .selected(self.filter_project_type == ModrinthProjectType::Resourcepack),
             )
-            .child(Button::new("shaders").label("Shaders").selected(self.project_type == ModrinthProjectType::Shader))
+            .child(Button::new("shaders").label("Shaders").selected(self.filter_project_type == ModrinthProjectType::Shader))
             .on_click(cx.listener(|page, clicked: &Vec<usize>, window, cx| match clicked[0] {
                 0 => page.set_project_type(ModrinthProjectType::Mod, window, cx),
                 1 => page.set_project_type(ModrinthProjectType::Modpack, window, cx),
@@ -454,7 +517,60 @@ impl Render for ModrinthSearchPage {
                 _ => {},
             }));
 
-        let parameters = v_flex().h_full().gap_3().child(type_button_group);
+        let loader_button_group = if self.filter_project_type == ModrinthProjectType::Mod || self.filter_project_type == ModrinthProjectType::Modpack {
+            Some(ButtonGroup::new("loader_group")
+                .layout(Axis::Vertical)
+                .outline()
+                .multiple(true)
+                .child(Button::new("fabric").label("Fabric").selected(self.filter_loaders.contains(&Loader::Fabric)))
+                .child(Button::new("forge").label("Forge").selected(self.filter_loaders.contains(&Loader::Forge)))
+                .child(Button::new("neoforge").label("NeoForge").selected(self.filter_loaders.contains(&Loader::NeoForge)))
+                .on_click(cx.listener(|page, clicked: &Vec<usize>, window, cx| {
+                    page.set_filter_loaders(clicked.iter().filter_map(|index| match index {
+                        0 => Some(Loader::Fabric),
+                        1 => Some(Loader::Forge),
+                        2 => Some(Loader::NeoForge),
+                        _ => None
+                    }).collect(), window, cx);
+                })))
+        } else {
+            None
+        };
+
+        let categories = match self.filter_project_type {
+            ModrinthProjectType::Mod => FILTER_MOD_CATEGORIES,
+            ModrinthProjectType::Modpack => FILTER_MODPACK_CATEGORIES,
+            ModrinthProjectType::Resourcepack => FILTER_RESOURCEPACK_CATEGORIES,
+            ModrinthProjectType::Shader => FILTER_SHADERPACK_CATEGORIES,
+            ModrinthProjectType::Other => &[],
+        };
+
+        let category = if self.show_categories.load(std::sync::atomic::Ordering::Relaxed) {
+            ButtonGroup::new("category_group")
+                .layout(Axis::Vertical)
+                .outline()
+                .multiple(true)
+                .children(categories.iter().map(|id| {
+                    Button::new(*id).label(if id == &"worldgen" {
+                        "Worldgen".into()
+                    } else {
+                        ts!(*id)
+                    }).selected(self.filter_categories.contains(id))
+                }))
+                .on_click(cx.listener(|page, clicked: &Vec<usize>, window, cx| {
+                    page.set_filter_categories(clicked.iter().filter_map(|index| categories.get(*index).map(|s| *s)).collect(), window, cx);
+                })).into_any_element()
+        } else {
+            let show_categories = self.show_categories.clone();
+            Button::new("show-categories").icon(IconName::ArrowDown).label("Categories").outline().on_click(move |_, _, _| {
+                show_categories.store(true, std::sync::atomic::Ordering::Relaxed);
+            }).into_any_element()
+        };
+
+        let parameters = v_flex().h_full().gap_3()
+            .child(type_button_group)
+            .when_some(loader_button_group, |this, group| this.child(group))
+            .child(category);
 
         let breadcrumb = if self.install_for.is_some() {
             (self.breadcrumb)().child("Add from Modrinth")
@@ -529,3 +645,59 @@ fn icon_for(str: &str) -> Option<&'static str> {
         _ => None,
     }
 }
+
+const FILTER_MOD_CATEGORIES: &[&'static str] = &[
+    "adventure",
+    "cursed",
+    "decoration",
+    "economy",
+    "equipment",
+    "food",
+    "library",
+    "magic",
+    "management",
+    "minigame",
+    "mobs",
+    "optimization",
+    "social",
+    "storage",
+    "technology",
+    "transportation",
+    "utility",
+    "worldgen"
+];
+
+const FILTER_MODPACK_CATEGORIES: &[&'static str] = &[
+    "adventure",
+    "challenging",
+    "combat",
+    "kitchen-sink",
+    "lightweight",
+    "magic",
+    "multiplayer",
+    "optimization",
+    "quests",
+    "technology",
+];
+
+const FILTER_RESOURCEPACK_CATEGORIES: &[&'static str] = &[
+    "combat",
+    "cursed",
+    "decoration",
+    "modded",
+    "realistic",
+    "simplistic",
+    "themed",
+    "tweaks",
+    "utility",
+    "vanilla-like",
+];
+
+const FILTER_SHADERPACK_CATEGORIES: &[&'static str] = &[
+    "cartoon",
+    "cursed",
+    "fantasy",
+    "realistic",
+    "semi-realistic",
+    "vanilla-like",
+];

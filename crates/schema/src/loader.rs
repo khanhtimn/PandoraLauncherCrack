@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::modrinth::ModrinthLoader;
 
-#[derive(EnumSetType, Serialize, Deserialize, Debug)]
+#[derive(EnumSetType, Serialize, Deserialize, Debug, Hash)]
 #[serde(rename_all = "lowercase")]
 pub enum Loader {
     #[serde(alias = "Vanilla")]
