@@ -17,8 +17,8 @@ pub struct ModrinthSearchRequest {
 #[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub struct ModrinthProjectVersionsRequest {
     pub project_id: Arc<str>,
-    pub game_versions: Option<Vec<Arc<str>>>,
-    pub loaders: Option<Vec<ModrinthLoader>>,
+    pub game_versions: Option<Arc<[Arc<str>]>>,
+    pub loaders: Option<Arc<[ModrinthLoader]>>,
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize)]

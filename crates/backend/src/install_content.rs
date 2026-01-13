@@ -85,7 +85,7 @@ impl BackendState {
                         } else {
                             let versions = self.meta.fetch(&ModrinthProjectVersionsMetadataItem(&ModrinthProjectVersionsRequest {
                                 project_id: project_id.clone(),
-                                game_versions: content.version_hint.clone().map(|v| vec![v]),
+                                game_versions: content.version_hint.clone().map(|v| [v].into()),
                                 loaders: None,
                             })).await?;
 

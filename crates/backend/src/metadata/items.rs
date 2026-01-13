@@ -287,7 +287,7 @@ impl<'a> MetadataItem for ModrinthProjectVersionsMetadataItem<'a> {
     }
 
     fn state(&self, states: &mut MetadataManagerStates) -> MetaLoadStateWrapper<Self::T> {
-        states.modrinth_project_versions.entry(self.0.project_id.clone()).or_default().clone()
+        states.modrinth_project_versions.entry(self.0.clone()).or_default().clone()
     }
 
     fn deserialize(bytes: &[u8]) -> Result<Self::T, MetaLoadError> {
