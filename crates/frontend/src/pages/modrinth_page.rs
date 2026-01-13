@@ -3,7 +3,7 @@ use std::{ops::Range, sync::{atomic::AtomicBool, Arc}, time::Duration};
 use bridge::{instance::InstanceID, meta::MetadataRequest};
 use gpui::{prelude::*, *};
 use gpui_component::{
-    breadcrumb::Breadcrumb, button::{Button, ButtonGroup, ButtonVariants}, h_flex, input::{Input, InputEvent, InputState}, notification::NotificationType, scroll::Scrollbar, skeleton::Skeleton, v_flex, ActiveTheme, Icon, IconName, Selectable, StyledExt, WindowExt
+    breadcrumb::Breadcrumb, button::{Button, ButtonGroup, ButtonVariants}, checkbox::Checkbox, h_flex, input::{Input, InputEvent, InputState}, notification::NotificationType, scroll::{ScrollableElement, Scrollbar}, skeleton::Skeleton, v_flex, ActiveTheme, Icon, IconName, Selectable, StyledExt, WindowExt
 };
 use rustc_hash::FxHashSet;
 use schema::{loader::Loader, modrinth::{
@@ -12,7 +12,7 @@ use schema::{loader::Loader, modrinth::{
 
 use crate::{
     component::error_alert::ErrorAlert, entity::{
-        metadata::{AsMetadataResult, FrontendMetadata, FrontendMetadataResult}, DataEntities
+        instance::InstanceEntries, metadata::{AsMetadataResult, FrontendMetadata, FrontendMetadataResult}, DataEntities
     }, ts, ui
 };
 
@@ -31,6 +31,8 @@ pub struct ModrinthSearchPage {
     filter_loaders: FxHashSet<Loader>,
     filter_categories: FxHashSet<&'static str>,
     show_categories: Arc<AtomicBool>,
+    can_install_latest: bool,
+    install_latest: Arc<AtomicBool>,
     last_search: Arc<str>,
     scroll_handle: UniformListScrollHandle,
     search_error: Option<SharedString>,
@@ -40,6 +42,16 @@ pub struct ModrinthSearchPage {
 impl ModrinthSearchPage {
     pub fn new(data: &DataEntities, install_for: Option<InstanceID>, breadcrumb: Box<dyn Fn() -> Breadcrumb>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let search_state = cx.new(|cx| InputState::new(window, cx).placeholder("Search mods...").clean_on_escape());
+
+        let can_install_latest = if let Some(install_for) = install_for {
+            if let Some(entry) = data.instances.read(cx).entries.get(&install_for) {
+                entry.read(cx).configuration.loader != Loader::Vanilla
+            } else {
+                false
+            }
+        } else {
+            false
+        };
 
         let _search_input_subscription = cx.subscribe_in(&search_state, window, Self::on_search_input_event);
 
@@ -58,6 +70,8 @@ impl ModrinthSearchPage {
             filter_loaders: FxHashSet::default(),
             filter_categories: FxHashSet::default(),
             show_categories: Arc::new(AtomicBool::new(false)),
+            can_install_latest,
+            install_latest: Arc::new(AtomicBool::new(can_install_latest)),
             last_search: Arc::from(""),
             scroll_handle: UniformListScrollHandle::new(),
             search_error: None,
@@ -352,11 +366,18 @@ impl ModrinthSearchPage {
                     .child(download_icon.clone())
                     .child(format_downloads(hit.downloads));
 
+                let install_latest = self.can_install_latest && self.install_latest.load(std::sync::atomic::Ordering::Relaxed);
+                let install_text = if install_latest {
+                    "Install Latest"
+                } else {
+                    "Install"
+                };
+
                 let buttons = ButtonGroup::new(("buttons", index))
                     .layout(Axis::Vertical)
                     .child(
                         Button::new(("install", index))
-                            .label("Install")
+                            .label(install_text)
                             .icon(download_icon)
                             .success()
                             .on_click({
@@ -368,15 +389,27 @@ impl ModrinthSearchPage {
 
                                 move |_, window, cx| {
                                     if project_type != ModrinthProjectType::Other {
-                                        crate::modals::modrinth_install::open(
-                                            name.as_str(),
-                                            project_id.clone(),
-                                            project_type,
-                                            install_for,
-                                            &data,
-                                            window,
-                                            cx
-                                        );
+                                        if install_latest {
+                                            crate::modals::modrinth_install_auto::open(
+                                                name.as_str(),
+                                                project_id.clone(),
+                                                project_type,
+                                                install_for.unwrap(),
+                                                &data,
+                                                window,
+                                                cx
+                                            );
+                                        } else {
+                                            crate::modals::modrinth_install::open(
+                                                name.as_str(),
+                                                project_id.clone(),
+                                                project_type,
+                                                install_for,
+                                                &data,
+                                                window,
+                                                cx
+                                            );
+                                        }
                                     } else {
                                         window.push_notification(
                                             (
@@ -567,10 +600,22 @@ impl Render for ModrinthSearchPage {
             }).into_any_element()
         };
 
+        let install_latest_checkbox = if self.can_install_latest {
+            Some(Checkbox::new("install-latest").label("Install Latest").checked(self.install_latest.load(std::sync::atomic::Ordering::Relaxed)).on_click({
+                let install_latest = self.install_latest.clone();
+                move |value, _, _| {
+                    install_latest.store(*value, std::sync::atomic::Ordering::Relaxed);
+                }
+            }))
+        } else {
+            None
+        };
+
         let parameters = v_flex().h_full().gap_3()
             .child(type_button_group)
             .when_some(loader_button_group, |this, group| this.child(group))
-            .child(category);
+            .child(category)
+            .when_some(install_latest_checkbox, |this, checkbox| this.child(checkbox));
 
         let breadcrumb = if self.install_for.is_some() {
             (self.breadcrumb)().child("Add from Modrinth")

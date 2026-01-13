@@ -17,7 +17,17 @@ pub fn show_notification(
     error_title: SharedString,
     modal_action: ModalAction,
 ) {
-    let notification = Notification::new()
+    show_notification_with_note(window, cx, error_title, modal_action, Notification::new());
+}
+
+pub fn show_notification_with_note(
+    window: &mut Window,
+    cx: &mut App,
+    error_title: SharedString,
+    modal_action: ModalAction,
+    mut notification: Notification
+) {
+    let notification = notification
         .autohide(false)
         .content(move |notification, window, cx| {
             if let Some(error) = &*modal_action.error.read().unwrap() {
