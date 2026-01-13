@@ -606,8 +606,9 @@ impl BackendState {
     }
 
     pub async fn prelaunch_apply_modpacks(&self, id: InstanceID, modal_action: &ModalAction) -> Vec<PathBuf> {
-        let (loader, mod_dir) = if let Some(instance) = self.instance_state.write().instances.get_mut(id) {
-            (instance.configuration.get().loader, instance.mods_path.clone())
+        let (loader, minecraft_version, mod_dir) = if let Some(instance) = self.instance_state.write().instances.get_mut(id) {
+            let configuration = instance.configuration.get();
+            (configuration.loader, configuration.minecraft_version, instance.mods_path.clone())
         } else {
             return Vec::new();
         };
@@ -667,7 +668,8 @@ impl BackendState {
 
                 let content_install = ContentInstall {
                     target: bridge::install::InstallTarget::Library,
-                    loader_hint: Loader::Unknown,
+                    loader_hint: loader,
+                    version_hint: Some(minecraft_version.into()),
                     files: filtered_downloads.clone().filter_map(|file| {
                         let path = SafePath::new(&file.path)?;
                         Some(ContentInstallFile {

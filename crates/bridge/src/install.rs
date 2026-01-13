@@ -10,7 +10,6 @@ pub enum InstallTarget {
     Library,
     NewInstance {
         name: Arc<str>,
-        minecraft_version: Option<Arc<str>>,
     },
 }
 
@@ -18,6 +17,7 @@ pub enum InstallTarget {
 pub struct ContentInstall {
     pub target: InstallTarget,
     pub loader_hint: Loader,
+    pub version_hint: Option<Arc<str>>,
     pub files: Arc<[ContentInstallFile]>,
 }
 
@@ -25,15 +25,7 @@ pub struct ContentInstall {
 pub enum ContentInstallPath {
     Raw(Arc<Path>),
     Safe(SafePath),
-}
-
-impl ContentInstallPath {
-    pub fn extension(&self) -> Option<&std::ffi::OsStr> {
-        match self {
-            Self::Raw(path) => path.extension(),
-            Self::Safe(safe_path) => safe_path.extension().map(std::ffi::OsStr::new),
-        }
-    }
+    Automatic,
 }
 
 #[derive(Debug, Clone)]
@@ -46,6 +38,10 @@ pub struct ContentInstallFile {
 
 #[derive(Debug, Clone)]
 pub enum ContentDownload {
+    Modrinth {
+        project_id: Arc<str>,
+        version_id: Option<Arc<str>>,
+    },
     Url {
         url: Arc<str>,
         sha1: Arc<str>,

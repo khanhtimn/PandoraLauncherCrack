@@ -4,20 +4,13 @@ use bridge::{install::{ContentDownload, ContentInstall, ContentInstallFile, Inst
 use enumset::EnumSet;
 use gpui::{prelude::*, *};
 use gpui_component::{
-    IndexPath, WindowExt,
-    button::{Button, ButtonVariants},
-    dialog::Dialog,
-    h_flex,
-    notification::NotificationType,
-    select::{SearchableVec, Select, SelectItem, SelectState},
-    spinner::Spinner,
-    v_flex,
+    button::{Button, ButtonVariants}, checkbox::Checkbox, dialog::Dialog, h_flex, notification::NotificationType, select::{SearchableVec, Select, SelectItem, SelectState}, spinner::Spinner, v_flex, IndexPath, WindowExt
 };
 use relative_path::RelativePath;
 use rustc_hash::FxHashMap;
 use schema::{
     content::ContentSource, loader::Loader, modrinth::{
-        ModrinthLoader, ModrinthProjectType, ModrinthProjectVersion, ModrinthProjectVersionsRequest, ModrinthProjectVersionsResult, ModrinthVersionStatus, ModrinthVersionType
+        ModrinthDependency, ModrinthDependencyType, ModrinthLoader, ModrinthProjectType, ModrinthProjectVersion, ModrinthProjectVersionsRequest, ModrinthProjectVersionsResult, ModrinthVersionStatus, ModrinthVersionType
     }
 };
 
@@ -57,6 +50,7 @@ struct InstallDialog {
     fixed_loader: Option<ModrinthLoader>,
     loader_select_state: Option<Entity<SelectState<Vec<SharedString>>>>,
     skip_loader_check_for_mod_version: bool,
+    install_dependencies: bool,
 
     mod_version_select_state: Option<Entity<SelectState<SearchableVec<ModVersionItem>>>>,
 }
@@ -72,7 +66,7 @@ pub fn open(
 ) {
     let project_versions = FrontendMetadata::request(
         &data.metadata,
-        MetadataRequest::ModrinthProjectVersions(ModrinthProjectVersionsRequest { project_id }),
+        MetadataRequest::ModrinthProjectVersions(ModrinthProjectVersionsRequest { project_id, game_versions: None, loaders: None, }),
         cx,
     );
 
@@ -207,6 +201,7 @@ fn open_from_entity(
                     loader_select_state: None,
                     last_selected_minecraft_version: None,
                     skip_loader_check_for_mod_version: false,
+                    install_dependencies: true,
                     mod_version_select_state: None,
                     last_selected_loader: None,
                 };
@@ -266,6 +261,7 @@ fn open_from_entity(
                     loader_select_state: None,
                     last_selected_minecraft_version: None,
                     skip_loader_check_for_mod_version: false,
+                    install_dependencies: true,
                     mod_version_select_state: None,
                     last_selected_loader: None,
                 };
@@ -348,7 +344,6 @@ impl InstallDialog {
                     |this, _, _, _| {
                         this.target = Some(InstallTarget::NewInstance {
                             name: "New Instance".into(),
-                            minecraft_version: None,
                         });
                     },
                 )));
@@ -403,7 +398,7 @@ impl InstallDialog {
             self.skip_loader_check_for_mod_version = false;
 
             if let Some(loader) = self.fixed_loader {
-                let loader = SharedString::new_static(loader.name());
+                let loader = SharedString::new_static(loader.pretty_name());
                 self.loader_select_state = Some(cx.new(|cx| {
                     let mut select_state = SelectState::new(vec![loader], None, window, cx);
                     select_state.set_selected_index(Some(IndexPath::default()), window, cx);
@@ -414,7 +409,7 @@ impl InstallDialog {
             {
                 if loaders.same_loaders_for_all_versions {
                     let single_loader = if loaders.loaders.len() == 1 {
-                        SharedString::new_static(loaders.loaders.iter().next().unwrap().name())
+                        SharedString::new_static(loaders.loaders.iter().next().unwrap().pretty_name())
                     } else {
                         let mut string = String::new();
                         let mut first = true;
@@ -424,7 +419,7 @@ impl InstallDialog {
                             } else {
                                 string.push_str(" / ");
                             }
-                            string.push_str(loader.name());
+                            string.push_str(loader.pretty_name());
                         }
                         SharedString::new(string)
                     };
@@ -437,7 +432,7 @@ impl InstallDialog {
                     }));
                 } else {
                     let keys: Vec<SharedString> =
-                        loaders.loaders.iter().map(ModrinthLoader::name).map(SharedString::new_static).collect();
+                        loaders.loaders.iter().map(ModrinthLoader::pretty_name).map(SharedString::new_static).collect();
 
                     let previous = self
                         .loader_select_state
@@ -572,6 +567,18 @@ impl InstallDialog {
             ModrinthProjectType::Other => "File version: ",
         };
 
+        let required_dependencies = selected_mod_version.as_ref().and_then(|version| {
+            version.dependencies.as_ref().map(|deps| {
+                deps
+                    .iter()
+                    .filter(|dep| {
+                        dep.project_id.is_some() && dep.dependency_type == ModrinthDependencyType::Required
+                    })
+                    .cloned()
+                    .collect::<Arc<[_]>>()
+            })
+        }).unwrap_or_default();
+
         let content = v_flex()
             .gap_2()
             .child(
@@ -585,8 +592,18 @@ impl InstallDialog {
                     .title_prefix("Loader: "),
             )
             .when_some(self.mod_version_select_state.as_ref(), |modal, mod_versions| {
-                modal.child(Select::new(mod_versions).title_prefix(mod_version_prefix)).child(
-                    Button::new("install").success().label("Install").on_click(cx.listener(
+                modal
+                    .child(Select::new(mod_versions).title_prefix(mod_version_prefix))
+                    .when(!required_dependencies.is_empty(), |modal| {
+                        modal.child(Checkbox::new("install_deps").checked(self.install_dependencies).label(if required_dependencies.len() == 1 {
+                            SharedString::new_static("Install 1 dependency")
+                        } else {
+                            SharedString::new(format!("Install {} dependencies", required_dependencies.len()))
+                        }).on_click(cx.listener(|dialog, value, _, _| {
+                            dialog.install_dependencies = *value;
+                        })))
+                    })
+                    .child(Button::new("install").success().label("Install").on_click(cx.listener(
                         move |this, _, window, cx| {
                             let Some(selected_mod_version) = selected_mod_version.as_ref() else {
                                 window.push_notification((NotificationType::Error, "No mod version selected"), cx);
@@ -628,28 +645,47 @@ impl InstallDialog {
                                 }
                             }
 
-                            if let InstallTarget::NewInstance { name, minecraft_version } = &mut target {
+                            let mut version_hint = None;
+                            if let Some(selected_minecraft_version) = &selected_minecraft_version {
+                                version_hint = Some(selected_minecraft_version.as_str().into());
+                            }
 
-                                if let Some(selected_minecraft_version) = &selected_minecraft_version {
-                                    *minecraft_version = Some(selected_minecraft_version.as_str().into());
-                                }
+                            if let InstallTarget::NewInstance { name } = &mut target {
                                 *name = this.name.as_str().into();
                             }
+
+                            let mut files = Vec::new();
+
+                            if this.install_dependencies {
+                                for dep in required_dependencies.iter() {
+                                    files.push(ContentInstallFile {
+                                        replace_old: None,
+                                        path: bridge::install::ContentInstallPath::Automatic,
+                                        download: ContentDownload::Modrinth {
+                                            project_id: dep.project_id.clone().unwrap(),
+                                            version_id: dep.version_id.clone()
+                                        },
+                                        content_source: ContentSource::Modrinth,
+                                    })
+                                }
+                            }
+
+                            files.push(ContentInstallFile {
+                                replace_old: None,
+                                path: bridge::install::ContentInstallPath::Safe(path),
+                                download: ContentDownload::Url {
+                                    url: install_file.url.clone(),
+                                    sha1: install_file.hashes.sha1.clone(),
+                                    size: install_file.size,
+                                },
+                                content_source: ContentSource::Modrinth,
+                            });
 
                             let content_install = ContentInstall {
                                 target,
                                 loader_hint,
-                                files: [ContentInstallFile {
-                                    replace_old: None,
-                                    path: bridge::install::ContentInstallPath::Safe(path),
-                                    download: ContentDownload::Url {
-                                        url: install_file.url.clone(),
-                                        sha1: install_file.hashes.sha1.clone(),
-                                        size: install_file.size,
-                                    },
-                                    content_source: ContentSource::Modrinth,
-                                }]
-                                .into(),
+                                version_hint,
+                                files: files.into(),
                             };
 
                             window.close_dialog(cx);

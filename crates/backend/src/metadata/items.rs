@@ -4,7 +4,7 @@ use std::{
 
 use reqwest::RequestBuilder;
 use schema::{
-    assets_index::AssetsIndex, fabric_launch::FabricLaunch, fabric_loader_manifest::{FabricLoaderManifest, FABRIC_LOADER_MANIFEST_URL}, java_runtime_component::JavaRuntimeComponentManifest, java_runtimes::{JavaRuntimes, JAVA_RUNTIMES_URL}, maven::MavenMetadataXml, modrinth::{ModrinthLoader, ModrinthProjectVersionsRequest, ModrinthProjectVersionsResult, ModrinthSearchRequest, ModrinthSearchResult, ModrinthVersionFileUpdateResult, MODRINTH_SEARCH_URL}, version::MinecraftVersion, version_manifest::{MinecraftVersionLink, MinecraftVersionManifest, MOJANG_VERSION_MANIFEST_URL}
+    assets_index::AssetsIndex, fabric_launch::FabricLaunch, fabric_loader_manifest::{FabricLoaderManifest, FABRIC_LOADER_MANIFEST_URL}, java_runtime_component::JavaRuntimeComponentManifest, java_runtimes::{JavaRuntimes, JAVA_RUNTIMES_URL}, maven::MavenMetadataXml, modrinth::{ModrinthLoader, ModrinthProjectVersion, ModrinthProjectVersionsRequest, ModrinthProjectVersionsResult, ModrinthSearchRequest, ModrinthSearchResult, ModrinthVersionFileUpdateResult, MODRINTH_SEARCH_URL}, version::MinecraftVersion, version_manifest::{MinecraftVersionLink, MinecraftVersionManifest, MOJANG_VERSION_MANIFEST_URL}
 };
 use serde::Serialize;
 use ustr::Ustr;
@@ -272,7 +272,14 @@ impl<'a> MetadataItem for ModrinthProjectVersionsMetadataItem<'a> {
 
     fn request(&self, client: &reqwest::Client) -> RequestBuilder {
         let url = format!("https://api.modrinth.com/v2/project/{}/version", self.0.project_id);
-        client.get(url)
+        let mut request = client.get(url);
+        if let Some(loaders) = &self.0.loaders && let Ok(str) = serde_json::to_string(loaders) {
+            request = request.query(&[("loaders", str)]);
+        }
+        if let Some(game_versions) = &self.0.game_versions && let Ok(str) = serde_json::to_string(game_versions) {
+            request = request.query(&[("game_versions", str)]);
+        }
+        request
     }
 
     fn expires(&self) -> bool {
@@ -281,6 +288,29 @@ impl<'a> MetadataItem for ModrinthProjectVersionsMetadataItem<'a> {
 
     fn state(&self, states: &mut MetadataManagerStates) -> MetaLoadStateWrapper<Self::T> {
         states.modrinth_project_versions.entry(self.0.project_id.clone()).or_default().clone()
+    }
+
+    fn deserialize(bytes: &[u8]) -> Result<Self::T, MetaLoadError> {
+        Ok(serde_json::from_slice(bytes)?)
+    }
+}
+
+pub struct ModrinthVersionMetadataItem(pub Arc<str>);
+
+impl MetadataItem for ModrinthVersionMetadataItem {
+    type T = ModrinthProjectVersion;
+
+    fn request(&self, client: &reqwest::Client) -> RequestBuilder {
+        let url = format!("https://api.modrinth.com/v2/version/{}", self.0);
+        client.get(url)
+    }
+
+    fn expires(&self) -> bool {
+        true
+    }
+
+    fn state(&self, states: &mut MetadataManagerStates) -> MetaLoadStateWrapper<Self::T> {
+        states.modrinth_versions.entry(self.0.clone()).or_default().clone()
     }
 
     fn deserialize(bytes: &[u8]) -> Result<Self::T, MetaLoadError> {

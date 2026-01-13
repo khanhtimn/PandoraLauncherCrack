@@ -17,6 +17,8 @@ pub struct ModrinthSearchRequest {
 #[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub struct ModrinthProjectVersionsRequest {
     pub project_id: Arc<str>,
+    pub game_versions: Option<Vec<Arc<str>>>,
+    pub loaders: Option<Vec<ModrinthLoader>>,
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize)]
@@ -108,12 +110,30 @@ pub struct ModrinthProjectVersion {
     pub project_id: Arc<str>,
     pub name: Option<Arc<str>>,
     pub version_number: Option<Arc<str>>,
+    pub dependencies: Option<Vec<ModrinthDependency>>,
     pub version_type: Option<ModrinthVersionType>,
     pub status: Option<ModrinthVersionStatus>,
     pub files: Arc<[ModrinthFile]>,
 }
 
-#[derive(enumset::EnumSetType, Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize)]
+pub struct ModrinthDependency {
+    pub version_id: Option<Arc<str>>,
+    pub project_id: Option<Arc<str>>,
+    pub file_name: Option<Arc<str>>,
+    pub dependency_type: ModrinthDependencyType,
+}
+
+#[derive(PartialEq, Eq, Debug, Copy, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ModrinthDependencyType {
+    Required,
+    Optional,
+    Incompatible,
+    Embedded,
+}
+
+#[derive(enumset::EnumSetType, Debug, Deserialize, Serialize, Hash, PartialOrd, Ord)]
 #[serde(rename_all = "lowercase")]
 pub enum ModrinthLoader {
     // Mods
@@ -132,7 +152,17 @@ pub enum ModrinthLoader {
 }
 
 impl ModrinthLoader {
-    pub fn name(self) -> &'static str {
+    pub fn install_directory(self) -> Option<&'static str> {
+        match self {
+            ModrinthLoader::Fabric | ModrinthLoader::Forge | ModrinthLoader::NeoForge => Some("mods"),
+            ModrinthLoader::Minecraft => Some("resourcepacks"),
+            ModrinthLoader::Iris | ModrinthLoader::Optifine => Some("shaderpacks"),
+            ModrinthLoader::Canvas => Some("resourcepacks"),
+            ModrinthLoader::Unknown => None,
+        }
+    }
+
+    pub fn pretty_name(self) -> &'static str {
         match self {
             Self::Fabric => "Fabric",
             Self::Forge => "Forge",
@@ -142,6 +172,19 @@ impl ModrinthLoader {
             Self::Optifine => "Optifine",
             Self::Canvas => "Canvas",
             Self::Unknown => "Unknown",
+        }
+    }
+
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::Fabric => "fabric",
+            Self::Forge => "forge",
+            Self::NeoForge => "neoforge",
+            Self::Minecraft => "minecraft",
+            Self::Iris => "iris",
+            Self::Optifine => "optifine",
+            Self::Canvas => "canvas",
+            Self::Unknown => "unknown",
         }
     }
 

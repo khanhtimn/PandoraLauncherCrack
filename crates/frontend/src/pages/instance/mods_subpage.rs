@@ -10,7 +10,8 @@ use gpui_component::{
     breadcrumb::{Breadcrumb, BreadcrumbItem}, button::{Button, ButtonVariants}, h_flex, list::{ListDelegate, ListItem, ListState}, notification::{Notification, NotificationType}, switch::Switch, v_flex, ActiveTheme as _, Icon, IconName, IndexPath, Sizable, WindowExt
 };
 use rustc_hash::FxHashSet;
-use schema::content::ContentSource;
+use schema::{content::ContentSource, loader::Loader};
+use ustr::Ustr;
 
 use crate::{entity::instance::InstanceEntry, png_render_cache, root};
 
@@ -19,6 +20,8 @@ use super::instance_page::InstanceSubpageType;
 pub struct InstanceModsSubpage {
     instance: InstanceID,
     instance_title: SharedString,
+    instance_loader: Loader,
+    instance_version: Ustr,
     backend_handle: BackendHandle,
     mods_state: Arc<AtomicBridgeDataLoadState>,
     mod_list: Entity<ListState<ModsListDelegate>>,
@@ -35,6 +38,8 @@ impl InstanceModsSubpage {
     ) -> Self {
         let instance = instance.read(cx);
         let instance_title = instance.title().into();
+        let instance_loader = instance.configuration.loader;
+        let instance_version = instance.configuration.minecraft_version;
         let instance_id = instance.id;
 
         let mods_state = Arc::clone(&instance.mods_state);
@@ -67,6 +72,8 @@ impl InstanceModsSubpage {
         Self {
             instance: instance_id,
             instance_title,
+            instance_loader,
+            instance_version,
             backend_handle,
             mods_state,
             mod_list,
@@ -129,16 +136,18 @@ impl Render for InstanceModsSubpage {
                     });
 
                     let backend_handle = backend_handle.clone();
+                    let entity = cx.entity();
                     let add_from_file_task = window.spawn(cx, async move |cx| {
                         let Ok(result) = receiver.await else {
                             return;
                         };
-                        _ = cx.update(move |window, cx| {
+                        _ = cx.update_window_entity(&entity, move |this, window, cx| {
                             match result {
                                 Ok(Some(paths)) => {
                                     let content_install = ContentInstall {
                                         target: InstallTarget::Instance(instance),
-                                        loader_hint: schema::loader::Loader::Unknown,
+                                        loader_hint: this.instance_loader,
+                                        version_hint: Some(this.instance_version.into()),
                                         files: paths.into_iter().filter_map(|path| {
                                             Some(ContentInstallFile {
                                                 replace_old: None,
