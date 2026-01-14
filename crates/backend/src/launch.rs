@@ -2149,7 +2149,11 @@ impl LaunchContext {
             ArgumentExpansionKey::AssetsRoot => self.assets_root.as_os_str().into(),
             ArgumentExpansionKey::AssetsIndexName => OsStr::new(&self.assets_index_name).into(),
             ArgumentExpansionKey::AuthUuid => OsString::from(self.login_info.uuid.as_hyphenated().to_string()).into(),
-            ArgumentExpansionKey::AuthAccessToken => OsStr::new(self.login_info.access_token.secret()).into(),
+            ArgumentExpansionKey::AuthAccessToken => OsStr::new(if let Some(access_token) = &self.login_info.access_token {
+                access_token.secret()
+            } else {
+                "offline"
+            }).into(),
             ArgumentExpansionKey::Clientid => OsStr::new("").into(), // These are just used for telemetry
             ArgumentExpansionKey::AuthXuid => OsStr::new("").into(), // These are just used for telemetry
             ArgumentExpansionKey::VersionType => OsStr::new("release").into(),

@@ -110,15 +110,8 @@ impl BackendState {
                 quick_play,
                 modal_action,
             } => {
-                let selected_account = self.account_info.write().get().selected_account;
-                let Some((profile, access_token)) = self.login_flow(&modal_action, selected_account).await else {
+                let Some(login_info) = self.get_login_info(&modal_action).await else {
                     return;
-                };
-
-                let login_info = MinecraftLoginInfo {
-                    uuid: profile.id,
-                    username: profile.name.clone(),
-                    access_token,
                 };
 
                 let add_mods = tokio::select! {
@@ -862,6 +855,17 @@ impl BackendState {
             },
             MessageToBackend::AddNewAccount { modal_action } => {
                 self.login_flow(&modal_action, None).await;
+            },
+            MessageToBackend::AddOfflineAccount { name, uuid } => {
+                let mut account_info = self.account_info.write();
+                account_info.modify(|account_info| {
+                    account_info.accounts.insert(uuid, BackendAccount {
+                        username: name,
+                        offline: true,
+                        head: None
+                    });
+                    account_info.selected_account = Some(uuid);
+                });
             },
             MessageToBackend::SelectAccount { uuid } => {
                 let mut account_info = self.account_info.write();

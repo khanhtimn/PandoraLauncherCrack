@@ -3,9 +3,11 @@ use std::sync::Arc;
 use bridge::{instance::InstanceID, message::MessageToBackend};
 use gpui::{prelude::*, *};
 use gpui_component::{
-    breadcrumb::{Breadcrumb, BreadcrumbItem}, button::{Button, ButtonVariants}, h_flex, resizable::{h_resizable, resizable_panel, ResizableState}, sidebar::{Sidebar, SidebarFooter, SidebarGroup, SidebarMenu, SidebarMenuItem}, v_flex, ActiveTheme as _, Icon, IconName, WindowExt
+    breadcrumb::{Breadcrumb, BreadcrumbItem}, button::{Button, ButtonVariants}, h_flex, input::{Input, InputState}, resizable::{h_resizable, resizable_panel, ResizableState}, sidebar::{Sidebar, SidebarFooter, SidebarGroup, SidebarMenu, SidebarMenuItem}, v_flex, ActiveTheme as _, Disableable, Icon, IconName, WindowExt
 };
+use rand::Rng;
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 use crate::{
     entity::{
@@ -351,14 +353,68 @@ impl Render for LauncherUI {
                         sheet
                             .title("Accounts")
                             .overlay_top(crate::root::sheet_margin_top(window))
-                            .gap_2()
-                            .child(Button::new("Add account").h_10().success().icon(IconName::Plus).label("Add account").on_click({
-                                let backend_handle = backend_handle.clone();
-                                move |_, window, cx| {
-                                    crate::root::start_new_account_login(&backend_handle, window, cx);
-                                }
-                            }))
-                            .children(items)
+                            .child(v_flex()
+                                .gap_2()
+                                .child(Button::new("add-account").h_10().success().icon(IconName::Plus).label("Add account").on_click({
+                                    let backend_handle = backend_handle.clone();
+                                    move |_, window, cx| {
+                                        crate::root::start_new_account_login(&backend_handle, window, cx);
+                                    }
+                                }))
+                                .child(Button::new("add-offline").h_10().success().icon(IconName::Plus).label("Add offline account").on_click({
+                                    let backend_handle = backend_handle.clone();
+                                    move |_, window, cx| {
+                                        let name_input = cx.new(|cx| {
+                                            InputState::new(window, cx)
+                                        });
+                                        let uuid_input = cx.new(|cx| {
+                                            InputState::new(window, cx).placeholder("Random")
+                                        });
+                                        let backend_handle = backend_handle.clone();
+                                        window.open_dialog(cx, move |dialog, _, cx| {
+                                            let username = name_input.read(cx).value();
+                                            let valid_name = username.len() >= 1 && username.len() <= 16 &&
+                                                username.as_bytes().iter().all(|c| *c > 32 && *c < 127);
+                                            let uuid = uuid_input.read(cx).value();
+                                            let valid_uuid = uuid.is_empty() || Uuid::try_parse(&uuid).is_ok();
+
+                                            let valid = valid_name && valid_uuid;
+
+                                            let backend_handle = backend_handle.clone();
+                                            let mut add_button = Button::new("add").label("Add").disabled(!valid).on_click(move |_, window, cx| {
+                                                window.close_all_dialogs(cx);
+
+                                                let uuid = if let Ok(uuid) = Uuid::try_parse(&uuid) {
+                                                   uuid
+                                                } else {
+                                                    let uuid: u128 = rand::thread_rng().r#gen();
+                                                    let uuid = (uuid & !0xF0000000000000000000) | 0x30000000000000000000; // set version to 3
+                                                    Uuid::from_u128(uuid)
+                                                };
+
+                                                backend_handle.send(MessageToBackend::AddOfflineAccount {
+                                                    name: username.clone().into(),
+                                                    uuid
+                                                });
+                                            });
+
+                                            if valid {
+                                                add_button = add_button.success();
+                                            }
+
+                                            dialog.title("Add offline account")
+                                                .child(v_flex()
+                                                    .gap_2()
+                                                    .child(crate::labelled("Name", Input::new(&name_input)))
+                                                    .child(crate::labelled("UUID", Input::new(&uuid_input)))
+                                                    .child(add_button)
+                                                )
+                                        });
+                                    }
+                                }))
+                                .children(items)
+                            )
+
                     });
                 }
             });

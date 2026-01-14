@@ -22,7 +22,7 @@ use ustr::Ustr;
 use uuid::Uuid;
 
 use crate::{
-    account::BackendAccountInfo, directories::LauncherDirectories, id_slab::IdSlab, instance::Instance, launch::Launcher, metadata::{items::MinecraftVersionManifestMetadataItem, manager::MetadataManager}, mod_metadata::ModMetadataManager, persistent::Persistent
+    account::{BackendAccountInfo, MinecraftLoginInfo}, directories::LauncherDirectories, id_slab::IdSlab, instance::Instance, launch::Launcher, metadata::{items::MinecraftVersionManifestMetadataItem, manager::MetadataManager}, mod_metadata::ModMetadataManager, persistent::Persistent
 };
 
 pub fn start(launcher_dir: PathBuf, send: FrontendHandle, self_handle: BackendHandle, recv: BackendReceiver) {
@@ -979,6 +979,41 @@ impl BackendState {
                 self.send.send_error(format!("Unable to rename instance folder: {}", err));
             }
         }
+    }
+
+    pub async fn get_login_info(&self, modal_action: &ModalAction) -> Option<MinecraftLoginInfo> {
+        let selected_account = {
+            let mut account_info = self.account_info.write();
+            let account_info = account_info.get();
+
+            let mut selected_account = account_info.selected_account;
+
+            if let Some(uuid) = selected_account {
+                if let Some(account) = account_info.accounts.get(&uuid) {
+                    if account.offline {
+                        return Some(MinecraftLoginInfo {
+                            uuid,
+                            username: account.username.clone(),
+                            access_token: None
+                        })
+                    }
+                } else {
+                    selected_account = None;
+                }
+            }
+
+            selected_account
+        };
+
+        let Some((profile, access_token)) = self.login_flow(modal_action, selected_account).await else {
+            return None;
+        };
+
+        Some(MinecraftLoginInfo {
+            uuid: profile.id,
+            username: profile.name.clone(),
+            access_token: Some(access_token),
+        })
     }
 }
 

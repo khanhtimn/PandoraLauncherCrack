@@ -113,12 +113,16 @@ pub enum MessageToBackend {
     AddNewAccount {
         modal_action: ModalAction,
     },
+    AddOfflineAccount {
+        name: Arc<str>,
+        uuid: Uuid
+    },
     SelectAccount {
         uuid: Uuid,
     },
     SetOpenGameOutputAfterLaunching {
         value: bool,
-    }
+    },
 }
 
 #[derive(Debug)]
