@@ -3,7 +3,14 @@ use std::sync::Arc;
 use bridge::{instance::InstanceID, message::MessageToBackend};
 use gpui::{prelude::*, *};
 use gpui_component::{
-    breadcrumb::{Breadcrumb, BreadcrumbItem}, button::{Button, ButtonVariants}, h_flex, input::{Input, InputState}, resizable::{h_resizable, resizable_panel, ResizableState}, sidebar::{Sidebar, SidebarFooter, SidebarGroup, SidebarMenu, SidebarMenuItem}, v_flex, ActiveTheme as _, Disableable, Icon, IconName, WindowExt
+    ActiveTheme as _, Disableable, Icon, IconName, WindowExt,
+    breadcrumb::{Breadcrumb, BreadcrumbItem},
+    button::{Button, ButtonVariants},
+    h_flex,
+    input::{Input, InputState},
+    resizable::{ResizableState, h_resizable, resizable_panel},
+    sidebar::{Sidebar, SidebarFooter, SidebarGroup, SidebarMenu, SidebarMenuItem},
+    v_flex,
 };
 use rand::Rng;
 use serde::{Deserialize, Serialize};
@@ -11,8 +18,20 @@ use uuid::Uuid;
 
 use crate::{
     entity::{
-        instance::{InstanceAddedEvent, InstanceEntries, InstanceModifiedEvent, InstanceMovedToTopEvent, InstanceRemovedEvent}, DataEntities
-    }, interface_config::InterfaceConfig, modals, pages::{instance::instance_page::{InstancePage, InstanceSubpageType}, instances_page::InstancesPage, modrinth_page::ModrinthSearchPage, syncing_page::SyncingPage}, png_render_cache, root
+        DataEntities,
+        instance::{
+            InstanceAddedEvent, InstanceEntries, InstanceModifiedEvent, InstanceMovedToTopEvent, InstanceRemovedEvent,
+        },
+    },
+    interface_config::InterfaceConfig,
+    modals,
+    pages::{
+        instance::instance_page::{InstancePage, InstanceSubpageType},
+        instances_page::InstancesPage,
+        modrinth_page::ModrinthSearchPage,
+        syncing_page::SyncingPage,
+    },
+    png_render_cache, root,
 };
 
 pub struct LauncherUI {
@@ -44,10 +63,12 @@ impl PageType {
             PageType::Modrinth { installing_for } => {
                 if let Some(installing_for) = installing_for {
                     if let Some(name) = InstanceEntries::find_name_by_id(&data.instances, *installing_for, cx) {
-                        return SerializedPageType::Modrinth { installing_for: Some(name) };
+                        return SerializedPageType::Modrinth {
+                            installing_for: Some(name),
+                        };
                     }
                 }
-                SerializedPageType::Modrinth { installing_for: None}
+                SerializedPageType::Modrinth { installing_for: None }
             },
             PageType::InstancePage(id, _) => {
                 if let Some(name) = InstanceEntries::find_name_by_id(&data.instances, *id, cx) {
@@ -66,10 +87,12 @@ impl PageType {
             SerializedPageType::Modrinth { installing_for } => {
                 if let Some(installing_for) = installing_for {
                     if let Some(id) = InstanceEntries::find_id_by_name(&data.instances, installing_for, cx) {
-                        return PageType::Modrinth { installing_for: Some(id) };
+                        return PageType::Modrinth {
+                            installing_for: Some(id),
+                        };
                     }
                 }
-                PageType::Modrinth { installing_for: None}
+                PageType::Modrinth { installing_for: None }
             },
             SerializedPageType::InstancePage(name) => {
                 if let Some(id) = InstanceEntries::find_id_by_name(&data.instances, name, cx) {
@@ -119,7 +142,9 @@ impl LauncherPage {
         match self {
             LauncherPage::Instances(_) => PageType::Instances,
             LauncherPage::Syncing(_) => PageType::Syncing,
-            LauncherPage::Modrinth { installing_for, .. } => PageType::Modrinth { installing_for: *installing_for },
+            LauncherPage::Modrinth { installing_for, .. } => PageType::Modrinth {
+                installing_for: *installing_for,
+            },
             LauncherPage::InstancePage(id, subpage, _) => PageType::InstancePage(*id, *subpage),
         }
     }
@@ -188,36 +213,45 @@ impl LauncherUI {
         }
     }
 
-    fn create_page(data: &DataEntities, page: PageType, breadcrumb: Option<Box<dyn Fn() -> Breadcrumb>>, window: &mut Window, cx: &mut Context<Self>) -> LauncherPage {
+    fn create_page(
+        data: &DataEntities,
+        page: PageType,
+        breadcrumb: Option<Box<dyn Fn() -> Breadcrumb>>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> LauncherPage {
         match page {
-            PageType::Instances => {
-                LauncherPage::Instances(cx.new(|cx| InstancesPage::new(data, window, cx)))
-            },
-            PageType::Syncing => {
-                LauncherPage::Syncing(cx.new(|cx| SyncingPage::new(data, window, cx)))
-            },
+            PageType::Instances => LauncherPage::Instances(cx.new(|cx| InstancesPage::new(data, window, cx))),
+            PageType::Syncing => LauncherPage::Syncing(cx.new(|cx| SyncingPage::new(data, window, cx))),
             PageType::Modrinth { installing_for } => {
                 let breadcrumb = breadcrumb.unwrap_or(Box::new(|| Breadcrumb::new().text_xl()));
-                let page = cx.new(|cx| {
-                    ModrinthSearchPage::new(data, installing_for, breadcrumb, window, cx)
-                });
-                LauncherPage::Modrinth {
-                    installing_for,
-                    page,
-                }
+                let page = cx.new(|cx| ModrinthSearchPage::new(data, installing_for, breadcrumb, window, cx));
+                LauncherPage::Modrinth { installing_for, page }
             },
             PageType::InstancePage(id, subpage) => {
-                let breadcrumb = breadcrumb.unwrap_or(Box::new(|| Breadcrumb::new().text_xl().child(BreadcrumbItem::new("Instances").on_click(|_, window, cx| {
-                    root::switch_page(PageType::Instances, None, window, cx);
-                }))));
-                LauncherPage::InstancePage(id, subpage, cx.new(|cx| {
-                    InstancePage::new(id, subpage, data, breadcrumb, window, cx)
-                }))
+                let breadcrumb = breadcrumb.unwrap_or(Box::new(|| {
+                    Breadcrumb::new()
+                        .text_xl()
+                        .child(BreadcrumbItem::new("Instances").on_click(|_, window, cx| {
+                            root::switch_page(PageType::Instances, None, window, cx);
+                        }))
+                }));
+                LauncherPage::InstancePage(
+                    id,
+                    subpage,
+                    cx.new(|cx| InstancePage::new(id, subpage, data, breadcrumb, window, cx)),
+                )
             },
         }
     }
 
-    pub fn switch_page(&mut self, page: PageType, breadcrumb: Option<Box<dyn Fn() -> Breadcrumb>>, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn switch_page(
+        &mut self,
+        page: PageType,
+        breadcrumb: Option<Box<dyn Fn() -> Breadcrumb>>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.page.page_type() == page {
             return;
         }
@@ -272,7 +306,12 @@ impl Render for LauncherUI {
                     SidebarMenuItem::new(name)
                         .active(active)
                         .on_click(cx.listener(move |launcher, _, window, cx| {
-                            launcher.switch_page(PageType::InstancePage(id, InstanceSubpageType::Quickplay), None, window, cx);
+                            launcher.switch_page(
+                                PageType::InstancePage(id, InstanceSubpageType::Quickplay),
+                                None,
+                                window,
+                                cx,
+                            );
                         }))
                 }),
             ));
@@ -298,20 +337,25 @@ impl Render for LauncherUI {
 
         let pandora_icon = Icon::empty().path("icons/pandora.svg");
 
-        let footer = div().flex_grow().id("footer-button").child(SidebarFooter::new()
-            .w_full()
-            .justify_center()
-            .text_size(rems(0.9375))
-            .child(account_head.size_8().min_w_8().min_h_8())
-            .child(account_name))
+        let footer = div()
+            .flex_grow()
+            .id("footer-button")
+            .child(
+                SidebarFooter::new()
+                    .w_full()
+                    .justify_center()
+                    .text_size(rems(0.9375))
+                    .child(account_head.size_8().min_w_8().min_h_8())
+                    .child(account_name),
+            )
             .on_click({
                 let accounts = self.data.accounts.clone();
                 let backend_handle = self.data.backend_handle.clone();
                 move |_, window, cx| {
-                    if accounts.read(cx).accounts.is_empty() {
-                        crate::root::start_new_account_login(&backend_handle, window, cx);
-                        return;
-                    }
+                    // if accounts.read(cx).accounts.is_empty() {
+                    //     crate::root::start_new_account_login(&backend_handle, window, cx);
+                    //     return;
+                    // }
 
                     let accounts = accounts.clone();
                     let backend_handle = backend_handle.clone();
@@ -337,103 +381,117 @@ impl Render for LauncherUI {
                             h_flex()
                                 .gap_2()
                                 .w_full()
-                                .child(Button::new(account_name.clone())
-                                    .flex_grow()
-                                    .when(selected, |this| {
-                                        this.info()
-                                    })
-                                    .h_10()
-                                    .child(head.size_8().min_w_8().min_h_8())
-                                    .child(account_name.clone())
-                                    .when(!selected, |this| {
-                                        this.on_click({
+                                .child(
+                                    Button::new(account_name.clone())
+                                        .flex_grow()
+                                        .when(selected, |this| this.info())
+                                        .h_10()
+                                        .child(head.size_8().min_w_8().min_h_8())
+                                        .child(account_name.clone())
+                                        .when(!selected, |this| {
+                                            this.on_click({
+                                                let backend_handle = backend_handle.clone();
+                                                let uuid = account.uuid;
+                                                move |_, _, _| {
+                                                    backend_handle.send(MessageToBackend::SelectAccount { uuid });
+                                                }
+                                            })
+                                        }),
+                                )
+                                .child(
+                                    Button::new((account_name.clone(), 1))
+                                        .icon(trash_icon.clone())
+                                        .h_10()
+                                        .w_10()
+                                        .danger()
+                                        .on_click({
                                             let backend_handle = backend_handle.clone();
                                             let uuid = account.uuid;
                                             move |_, _, _| {
-                                                backend_handle.send(MessageToBackend::SelectAccount { uuid });
+                                                backend_handle.send(MessageToBackend::DeleteAccount { uuid });
                                             }
-                                        })
-                                    }))
-                                .child(Button::new((account_name.clone(), 1))
-                                    .icon(trash_icon.clone())
-                                    .h_10()
-                                    .w_10()
-                                    .danger()
-                                    .on_click({
-                                        let backend_handle = backend_handle.clone();
-                                        let uuid = account.uuid;
-                                        move |_, _, _| {
-                                            backend_handle.send(MessageToBackend::DeleteAccount { uuid });
-                                        }
-                                    }))
-
+                                        }),
+                                )
                         });
 
-                        sheet
-                            .title("Accounts")
-                            .overlay_top(crate::root::sheet_margin_top(window))
-                            .child(v_flex()
+                        sheet.title("Accounts").overlay_top(crate::root::sheet_margin_top(window)).child(
+                            v_flex()
                                 .gap_2()
-                                .child(Button::new("add-account").h_10().success().icon(IconName::Plus).label("Add account").on_click({
-                                    let backend_handle = backend_handle.clone();
-                                    move |_, window, cx| {
-                                        crate::root::start_new_account_login(&backend_handle, window, cx);
-                                    }
-                                }))
-                                .child(Button::new("add-offline").h_10().success().icon(IconName::Plus).label("Add offline account").on_click({
-                                    let backend_handle = backend_handle.clone();
-                                    move |_, window, cx| {
-                                        let name_input = cx.new(|cx| {
-                                            InputState::new(window, cx)
-                                        });
-                                        let uuid_input = cx.new(|cx| {
-                                            InputState::new(window, cx).placeholder("Random")
-                                        });
-                                        let backend_handle = backend_handle.clone();
-                                        window.open_dialog(cx, move |dialog, _, cx| {
-                                            let username = name_input.read(cx).value();
-                                            let valid_name = username.len() >= 1 && username.len() <= 16 &&
-                                                username.as_bytes().iter().all(|c| *c > 32 && *c < 127);
-                                            let uuid = uuid_input.read(cx).value();
-                                            let valid_uuid = uuid.is_empty() || Uuid::try_parse(&uuid).is_ok();
-
-                                            let valid = valid_name && valid_uuid;
-
+                                .child(
+                                    Button::new("add-account")
+                                        .h_10()
+                                        .success()
+                                        .icon(IconName::Plus)
+                                        .label("Add account")
+                                        .on_click({
                                             let backend_handle = backend_handle.clone();
-                                            let mut add_button = Button::new("add").label("Add").disabled(!valid).on_click(move |_, window, cx| {
-                                                window.close_all_dialogs(cx);
-
-                                                let uuid = if let Ok(uuid) = Uuid::try_parse(&uuid) {
-                                                   uuid
-                                                } else {
-                                                    let uuid: u128 = rand::thread_rng().r#gen();
-                                                    let uuid = (uuid & !0xF0000000000000000000) | 0x30000000000000000000; // set version to 3
-                                                    Uuid::from_u128(uuid)
-                                                };
-
-                                                backend_handle.send(MessageToBackend::AddOfflineAccount {
-                                                    name: username.clone().into(),
-                                                    uuid
-                                                });
-                                            });
-
-                                            if valid {
-                                                add_button = add_button.success();
+                                            move |_, window, cx| {
+                                                crate::root::start_new_account_login(&backend_handle, window, cx);
                                             }
+                                        }),
+                                )
+                                .child(
+                                    Button::new("add-offline")
+                                        .h_10()
+                                        .success()
+                                        .icon(IconName::Plus)
+                                        .label("Add offline account")
+                                        .on_click({
+                                            let backend_handle = backend_handle.clone();
+                                            move |_, window, cx| {
+                                                let name_input = cx.new(|cx| InputState::new(window, cx));
+                                                let uuid_input =
+                                                    cx.new(|cx| InputState::new(window, cx).placeholder("Random"));
+                                                let backend_handle = backend_handle.clone();
+                                                window.open_dialog(cx, move |dialog, _, cx| {
+                                                    let username = name_input.read(cx).value();
+                                                    let valid_name = username.len() >= 1
+                                                        && username.len() <= 16
+                                                        && username.as_bytes().iter().all(|c| *c > 32 && *c < 127);
+                                                    let uuid = uuid_input.read(cx).value();
+                                                    let valid_uuid = uuid.is_empty() || Uuid::try_parse(&uuid).is_ok();
 
-                                            dialog.title("Add offline account")
-                                                .child(v_flex()
-                                                    .gap_2()
-                                                    .child(crate::labelled("Name", Input::new(&name_input)))
-                                                    .child(crate::labelled("UUID", Input::new(&uuid_input)))
-                                                    .child(add_button)
-                                                )
-                                        });
-                                    }
-                                }))
-                                .children(items)
-                            )
+                                                    let valid = valid_name && valid_uuid;
 
+                                                    let backend_handle = backend_handle.clone();
+                                                    let mut add_button = Button::new("add")
+                                                        .label("Add")
+                                                        .disabled(!valid)
+                                                        .on_click(move |_, window, cx| {
+                                                            window.close_all_dialogs(cx);
+
+                                                            let uuid = if let Ok(uuid) = Uuid::try_parse(&uuid) {
+                                                                uuid
+                                                            } else {
+                                                                let uuid: u128 = rand::thread_rng().r#gen();
+                                                                let uuid = (uuid & !0xF0000000000000000000)
+                                                                    | 0x30000000000000000000; // set version to 3
+                                                                Uuid::from_u128(uuid)
+                                                            };
+
+                                                            backend_handle.send(MessageToBackend::AddOfflineAccount {
+                                                                name: username.clone().into(),
+                                                                uuid,
+                                                            });
+                                                        });
+
+                                                    if valid {
+                                                        add_button = add_button.success();
+                                                    }
+
+                                                    dialog.title("Add offline account").child(
+                                                        v_flex()
+                                                            .gap_2()
+                                                            .child(crate::labelled("Name", Input::new(&name_input)))
+                                                            .child(crate::labelled("UUID", Input::new(&uuid_input)))
+                                                            .child(add_button),
+                                                    )
+                                                });
+                                            }
+                                        }),
+                                )
+                                .children(items),
+                        )
                     });
                 }
             });
@@ -443,10 +501,7 @@ impl Render for LauncherUI {
             .gap_2()
             .p_2()
             .rounded(cx.theme().radius)
-            .hover(|this| {
-                this.bg(cx.theme().sidebar_accent)
-                    .text_color(cx.theme().sidebar_accent_foreground)
-            })
+            .hover(|this| this.bg(cx.theme().sidebar_accent).text_color(cx.theme().sidebar_accent_foreground))
             .child(IconName::Settings)
             .on_click({
                 let data = self.data.clone();

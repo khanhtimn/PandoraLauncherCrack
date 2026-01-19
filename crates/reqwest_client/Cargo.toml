@@ -13,16 +13,16 @@ gpui.workspace = true
 anyhow.workspace = true
 
 reqwest = { git = "https://github.com/zed-industries/reqwest.git", rev = "c15662463bda39148ba154100dd44d3fba5873a4", default-features = false, features = [
-    "charset",
-    "http2",
-    "macos-system-configuration",
-    "multipart",
-    "rustls-tls-native-roots",
-    "socks",
-    "stream",
+  "charset",
+  "http2",
+  "macos-system-configuration",
+  "multipart",
+  "rustls-tls-native-roots",
+  "socks",
+  "stream",
 ], package = "zed-reqwest", version = "0.12.15-zed" }
-rustls = { version = "0.23.26" }
-rustls-platform-verifier = "0.5.0"
+rustls = { version = "0.23.26", default-features = false, features = ["std", "tls12", "ring"] }
+rustls-platform-verifier = { version = "0.5", default-features = false }
 bytes = "1.0"
 futures = "0.3"
 tokio = { version = "1", features = ["rt", "rt-multi-thread"] }
