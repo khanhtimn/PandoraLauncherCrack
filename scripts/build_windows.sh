@@ -26,4 +26,4 @@ cargo packager --config '{'\
 '  "icons": ["package/icon_32x32.png"]'\
 '}'
 
-mv dist/PandoraLauncher-Windows.exe dist/PandoraLauncher-Windows-$version-x86_64.exe
+mv dist/PandoraLauncher-Windows.exe dist/PandoraLauncherCracked-Windows-$version-x86_64.exe

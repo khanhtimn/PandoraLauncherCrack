@@ -26,4 +26,4 @@ cargo packager --config '{'\
 '  "icons": ["package/icon_32x32.png"]'\
 '}'
 
-mv dist/PandoraLauncher-Linux dist/PandoraLauncher-Linux-$version-x86_64
+mv dist/PandoraLauncher-Linux dist/PandoraLauncherCracked-Linux-$version-x86_64
