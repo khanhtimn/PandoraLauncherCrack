@@ -521,6 +521,7 @@ impl Instance {
                             filename_hash,
                             path: alternate_path.into(),
                             enabled,
+                            content_source: old_summary.content_source.clone(),
                             disabled_children: old_summary.disabled_children.clone(),
                         });
                     }
@@ -735,6 +736,7 @@ fn create_instance_mod_summary(path: &Path, mod_metadata_manager: &Arc<ModMetada
     };
 
     let disabled_children = read_disabled_children_for(path).unwrap_or_default();
+    let content_source = mod_metadata_manager.read_content_sources().get(&summary.hash).unwrap_or_default();
 
     Some(InstanceModSummary {
         mod_summary: summary,
@@ -744,6 +746,7 @@ fn create_instance_mod_summary(path: &Path, mod_metadata_manager: &Arc<ModMetada
         filename_hash,
         path: path.into(),
         enabled,
+        content_source,
         disabled_children,
     })
 }

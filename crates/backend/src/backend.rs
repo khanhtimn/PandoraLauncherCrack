@@ -683,7 +683,7 @@ impl BackendState {
                                 sha1: file.hashes.sha1.clone(),
                                 size: file.file_size,
                             },
-                            content_source: schema::content::ContentSource::Modrinth,
+                            content_source: schema::content::ContentSource::ModrinthUnknown,
                         })
                     }).collect(),
                 };

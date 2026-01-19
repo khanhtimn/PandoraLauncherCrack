@@ -308,7 +308,7 @@ impl BackendState {
                 let sources = files.iter()
                     .filter_map(|install| {
                         if install.content_file.content_source != ContentSource::Manual {
-                            Some((install.hash.clone(), install.content_file.content_source))
+                            Some((install.hash.clone(), install.content_file.content_source.clone()))
                         } else {
                             None
                         }

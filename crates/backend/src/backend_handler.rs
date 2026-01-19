@@ -356,7 +356,7 @@ impl BackendState {
                 { // Scope is needed so await doesn't complain about the non-send RwLockReadGuard
                     let sources = self.mod_metadata_manager.read_content_sources();
                     for summary in mods.iter() {
-                        let source = sources.get(&summary.mod_summary.hash).copied().unwrap_or(ContentSource::Manual);
+                        let source = sources.get(&summary.mod_summary.hash).unwrap_or(ContentSource::Manual);
                         let semaphore = &semaphore;
                         let meta = &meta;
                         let params = &params;
@@ -369,7 +369,7 @@ impl BackendState {
                                     tracker.notify();
                                     Ok(ModUpdateAction::ManualInstall)
                                 },
-                                ContentSource::Modrinth => {
+                                ContentSource::ModrinthUnknown | ContentSource::ModrinthProject { .. } => {
                                     let permit = semaphore.acquire().await.unwrap();
                                     let result = if matches!(summary.mod_summary.extra, LoaderSpecificModSummary::ModrinthModpack { .. }) {
                                         meta.fetch(&ModrinthV3VersionUpdateMetadataItem {
@@ -393,6 +393,14 @@ impl BackendState {
 
                                     let result = result?;
 
+                                    if let ContentSource::ModrinthProject { ref project } = source {
+                                        if &result.0.project_id != project {
+                                            eprintln!("Refusing to update {:?}, mismatched project ids: expected {}, got {}",
+                                                summary.mod_summary.hash, &result.0.project_id, &project);
+                                            return Ok(ModUpdateAction::ErrorNotFound);
+                                        }
+                                    }
+
                                     let install_file = result
                                         .0
                                         .files
@@ -408,7 +416,10 @@ impl BackendState {
                                     if latest_hash == summary.mod_summary.hash {
                                         Ok(ModUpdateAction::AlreadyUpToDate)
                                     } else {
-                                        Ok(ModUpdateAction::Modrinth(install_file.clone()))
+                                        Ok(ModUpdateAction::Modrinth {
+                                            file: install_file.clone(),
+                                            project_id: result.0.project_id.clone(),
+                                        })
                                     }
                                 },
                             }
@@ -478,8 +489,8 @@ impl BackendState {
                             modal_action.set_finished();
                             return;
                         },
-                        ModUpdateAction::Modrinth(modrinth_file) => {
-                            let mut path = mod_summary.path.with_file_name(&*modrinth_file.filename);
+                        ModUpdateAction::Modrinth { file, project_id } => {
+                            let mut path = mod_summary.path.with_file_name(&*file.filename);
                             if !mod_summary.enabled {
                                 path.add_extension("disabled");
                             }
@@ -492,11 +503,11 @@ impl BackendState {
                                     replace_old: Some(mod_summary.path.clone()),
                                     path: bridge::install::ContentInstallPath::Raw(path.into()),
                                     download: ContentDownload::Url {
-                                        url: modrinth_file.url.clone(),
-                                        sha1: modrinth_file.hashes.sha1.clone(),
-                                        size: modrinth_file.size,
+                                        url: file.url.clone(),
+                                        sha1: file.hashes.sha1.clone(),
+                                        size: file.size,
                                     },
-                                    content_source: ContentSource::Modrinth,
+                                    content_source: ContentSource::ModrinthProject { project: project_id },
                                 }].into(),
                             }
                         },

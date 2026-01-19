@@ -1,6 +1,6 @@
 use std::{collections::HashSet, path::Path, sync::Arc};
 
-use schema::modification::ModrinthModpackFileDownload;
+use schema::{content::ContentSource, modification::ModrinthModpackFileDownload};
 
 use crate::safe_path::SafePath;
 
@@ -66,6 +66,7 @@ pub struct InstanceModSummary {
     pub filename_hash: u64,
     pub path: Arc<Path>,
     pub enabled: bool,
+    pub content_source: ContentSource,
     pub disabled_children: HashSet<String>,
 }
 

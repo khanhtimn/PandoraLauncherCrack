@@ -24,7 +24,11 @@ pub struct InterfaceConfig {
     pub quick_delete_mods: bool,
     #[serde(default, deserialize_with = "schema::try_deserialize")]
     pub quick_delete_instance: bool,
+    #[serde(default, deserialize_with = "schema::try_deserialize")]
+    pub modrinth_install_normally: bool,
 }
+
+
 
 impl InterfaceConfig {
     pub fn init(cx: &mut App, path: Arc<Path>) {
