@@ -6,6 +6,7 @@ use gpui_component::{
     breadcrumb::{Breadcrumb, BreadcrumbItem}, button::{Button, ButtonVariants}, h_flex, input::{Input, InputState}, resizable::{h_resizable, resizable_panel, ResizableState}, sidebar::{Sidebar, SidebarFooter, SidebarGroup, SidebarMenu, SidebarMenuItem}, v_flex, ActiveTheme as _, Disableable, Icon, IconName, WindowExt
 };
 use rand::Rng;
+use schema::modrinth::ModrinthProjectType;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -32,6 +33,7 @@ pub enum PageType {
     Syncing,
     Modrinth {
         installing_for: Option<InstanceID>,
+        project_type: Option<ModrinthProjectType>,
     },
     InstancePage(InstanceID, InstanceSubpageType),
 }
@@ -41,13 +43,13 @@ impl PageType {
         match self {
             PageType::Instances => SerializedPageType::Instances,
             PageType::Syncing => SerializedPageType::Syncing,
-            PageType::Modrinth { installing_for } => {
+            PageType::Modrinth { installing_for, .. } => {
                 if let Some(installing_for) = installing_for {
                     if let Some(name) = InstanceEntries::find_name_by_id(&data.instances, *installing_for, cx) {
                         return SerializedPageType::Modrinth { installing_for: Some(name) };
                     }
                 }
-                SerializedPageType::Modrinth { installing_for: None}
+                SerializedPageType::Modrinth { installing_for: None }
             },
             PageType::InstancePage(id, _) => {
                 if let Some(name) = InstanceEntries::find_name_by_id(&data.instances, *id, cx) {
@@ -66,10 +68,10 @@ impl PageType {
             SerializedPageType::Modrinth { installing_for } => {
                 if let Some(installing_for) = installing_for {
                     if let Some(id) = InstanceEntries::find_id_by_name(&data.instances, installing_for, cx) {
-                        return PageType::Modrinth { installing_for: Some(id) };
+                        return PageType::Modrinth { installing_for: Some(id), project_type: None };
                     }
                 }
-                PageType::Modrinth { installing_for: None}
+                PageType::Modrinth { installing_for: None, project_type: None }
             },
             SerializedPageType::InstancePage(name) => {
                 if let Some(id) = InstanceEntries::find_id_by_name(&data.instances, name, cx) {
@@ -119,7 +121,7 @@ impl LauncherPage {
         match self {
             LauncherPage::Instances(_) => PageType::Instances,
             LauncherPage::Syncing(_) => PageType::Syncing,
-            LauncherPage::Modrinth { installing_for, .. } => PageType::Modrinth { installing_for: *installing_for },
+            LauncherPage::Modrinth { installing_for, .. } => PageType::Modrinth { installing_for: *installing_for, project_type: None },
             LauncherPage::InstancePage(id, subpage, _) => PageType::InstancePage(*id, *subpage),
         }
     }
@@ -199,9 +201,9 @@ impl LauncherUI {
             PageType::Syncing => {
                 LauncherPage::Syncing(cx.new(|cx| SyncingPage::new(data, window, cx)))
             },
-            PageType::Modrinth { installing_for } => {
+            PageType::Modrinth { installing_for, project_type } => {
                 let page = cx.new(|cx| {
-                    ModrinthSearchPage::new(installing_for, path, data, window, cx)
+                    ModrinthSearchPage::new(installing_for, project_type, path, data, window, cx)
                 });
                 LauncherPage::Modrinth {
                     installing_for,
@@ -253,9 +255,9 @@ impl Render for LauncherUI {
 
         let launcher_group = SidebarGroup::new("Content").child(
             SidebarMenu::new().children([SidebarMenuItem::new("Modrinth")
-                .active(page_type == PageType::Modrinth { installing_for: None })
+                .active(page_type == PageType::Modrinth { installing_for: None, project_type: None })
                 .on_click(cx.listener(|launcher, _, window, cx| {
-                    launcher.switch_page(PageType::Modrinth { installing_for: None }, &[], window, cx);
+                    launcher.switch_page(PageType::Modrinth { installing_for: None, project_type: None }, &[], window, cx);
                 }))]),
         );
 

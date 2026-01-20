@@ -24,7 +24,7 @@ impl PagePath {
             let title = match pages[i] {
                 PageType::Instances => "Instances".into(),
                 PageType::Syncing => "Syncing".into(),
-                PageType::Modrinth { installing_for } => {
+                PageType::Modrinth { installing_for, .. } => {
                     if installing_for.is_some() {
                         "Add from Modrinth".into()
                     } else {

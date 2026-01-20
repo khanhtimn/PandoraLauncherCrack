@@ -45,7 +45,7 @@ struct InstalledMod {
 }
 
 impl ModrinthSearchPage {
-    pub fn new(install_for: Option<InstanceID>, page_path: PagePath, data: &DataEntities, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(install_for: Option<InstanceID>, project_type: Option<ModrinthProjectType>, page_path: PagePath, data: &DataEntities, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let search_state = cx.new(|cx| InputState::new(window, cx).placeholder("Search mods...").clean_on_escape());
 
         let mut can_install_latest = false;
@@ -73,6 +73,16 @@ impl ModrinthSearchPage {
 
         let _search_input_subscription = cx.subscribe_in(&search_state, window, Self::on_search_input_event);
 
+        let mut filter_project_type = if let Some(project_type) = project_type {
+            InterfaceConfig::get_mut(cx).modrinth_page_project_type = project_type;
+            project_type
+        } else {
+            InterfaceConfig::get(cx).modrinth_page_project_type
+        };
+        if filter_project_type == ModrinthProjectType::Other {
+            filter_project_type = ModrinthProjectType::Mod;
+        }
+
         let mut page = Self {
             data: data.clone(),
             hits: Vec::new(),
@@ -84,7 +94,7 @@ impl ModrinthSearchPage {
             search_state,
             _search_input_subscription,
             _delayed_clear_task: Task::ready(()),
-            filter_project_type: ModrinthProjectType::Mod,
+            filter_project_type,
             filter_loaders: FxHashSet::default(),
             filter_categories: FxHashSet::default(),
             show_categories: Arc::new(AtomicBool::new(false)),
@@ -126,6 +136,7 @@ impl ModrinthSearchPage {
         if self.filter_project_type == project_type {
             return;
         }
+        InterfaceConfig::get_mut(cx).modrinth_page_project_type = project_type;
         self.filter_project_type = project_type;
         self.filter_categories.clear();
         self.search_state.update(cx, |state, cx| {

@@ -11,7 +11,7 @@ use gpui_component::{
 };
 use parking_lot::Mutex;
 use rustc_hash::FxHashSet;
-use schema::{content::ContentSource, loader::Loader};
+use schema::{content::ContentSource, loader::Loader, modrinth::ModrinthProjectType};
 use ustr::Ustr;
 
 use crate::{component::content_list::ContentListDelegate, entity::instance::InstanceEntry, interface_config::InterfaceConfig, png_render_cache, root, ui::PageType};
@@ -98,7 +98,10 @@ impl Render for InstanceModsSubpage {
             .child(Button::new("addmr").label("Add from Modrinth").success().compact().small().on_click({
                 let instance = self.instance;
                 move |_, window, cx| {
-                    let page = crate::ui::PageType::Modrinth { installing_for: Some(instance) };
+                    let page = crate::ui::PageType::Modrinth {
+                        installing_for: Some(instance),
+                        project_type: Some(ModrinthProjectType::Mod)
+                    };
                     let path = &[PageType::Instances, PageType::InstancePage(instance, InstanceSubpageType::Mods)];
                     root::switch_page(page, path, window, cx);
                 }
