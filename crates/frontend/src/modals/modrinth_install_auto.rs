@@ -131,6 +131,7 @@ fn handle_project_versions(
             };
             let configuration = instance.read(cx).configuration.clone();
             let modrinth_loader = configuration.loader.as_modrinth_loader();
+            let is_mod = project_type == ModrinthProjectType::Mod || project_type == ModrinthProjectType::Modpack;
             let matching_versions = project_versions.0.iter().filter(|version| {
                 let Some(loaders) = version.loaders.clone() else {
                     return false;
@@ -144,7 +145,7 @@ fn handle_project_versions(
                 if !game_versions.contains(&configuration.minecraft_version) {
                     return false;
                 }
-                if !loaders.contains(&modrinth_loader) {
+                if is_mod && !loaders.contains(&modrinth_loader) {
                     return false;
                 }
                 true

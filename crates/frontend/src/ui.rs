@@ -13,10 +13,12 @@ use gpui_component::{
     v_flex,
 };
 use rand::Rng;
+use schema::modrinth::ModrinthProjectType;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
+    component::page_path::PagePath,
     entity::{
         DataEntities,
         instance::{
@@ -51,6 +53,7 @@ pub enum PageType {
     Syncing,
     Modrinth {
         installing_for: Option<InstanceID>,
+        project_type: Option<ModrinthProjectType>,
     },
     InstancePage(InstanceID, InstanceSubpageType),
 }
@@ -60,7 +63,7 @@ impl PageType {
         match self {
             PageType::Instances => SerializedPageType::Instances,
             PageType::Syncing => SerializedPageType::Syncing,
-            PageType::Modrinth { installing_for } => {
+            PageType::Modrinth { installing_for, .. } => {
                 if let Some(installing_for) = installing_for {
                     if let Some(name) = InstanceEntries::find_name_by_id(&data.instances, *installing_for, cx) {
                         return SerializedPageType::Modrinth {
@@ -89,10 +92,14 @@ impl PageType {
                     if let Some(id) = InstanceEntries::find_id_by_name(&data.instances, installing_for, cx) {
                         return PageType::Modrinth {
                             installing_for: Some(id),
+                            project_type: None,
                         };
                     }
                 }
-                PageType::Modrinth { installing_for: None }
+                PageType::Modrinth {
+                    installing_for: None,
+                    project_type: None,
+                }
             },
             SerializedPageType::InstancePage(name) => {
                 if let Some(id) = InstanceEntries::find_id_by_name(&data.instances, name, cx) {
@@ -144,6 +151,7 @@ impl LauncherPage {
             LauncherPage::Syncing(_) => PageType::Syncing,
             LauncherPage::Modrinth { installing_for, .. } => PageType::Modrinth {
                 installing_for: *installing_for,
+                project_type: None,
             },
             LauncherPage::InstancePage(id, subpage, _) => PageType::InstancePage(*id, *subpage),
         }
@@ -185,7 +193,7 @@ impl LauncherUI {
                 if let LauncherPage::InstancePage(id, _, _) = this.page
                     && id == event.id
                 {
-                    this.switch_page(PageType::Instances, None, window, cx);
+                    this.switch_page(PageType::Instances, &[], window, cx);
                 }
                 cx.notify();
             });
@@ -199,11 +207,14 @@ impl LauncherUI {
                 cx.notify();
             });
 
-        let page_type = PageType::from_serialized(&InterfaceConfig::get(cx).main_page, data, cx);
+        let config = InterfaceConfig::get(cx);
+        let page_type = PageType::from_serialized(&config.main_page, data, cx);
+        let page_path: Vec<PageType> =
+            config.page_path.iter().map(|page| PageType::from_serialized(page, data, cx)).collect();
 
         Self {
             data: data.clone(),
-            page: Self::create_page(&data, page_type, None, window, cx),
+            page: Self::create_page(&data, page_type, &page_path, window, cx),
             sidebar_state,
             recent_instances,
             _instance_added_subscription,
@@ -216,47 +227,47 @@ impl LauncherUI {
     fn create_page(
         data: &DataEntities,
         page: PageType,
-        breadcrumb: Option<Box<dyn Fn() -> Breadcrumb>>,
+        path: &[PageType],
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> LauncherPage {
+        let path = PagePath::new(path.iter().cloned().chain(std::iter::once(page)).collect());
         match page {
             PageType::Instances => LauncherPage::Instances(cx.new(|cx| InstancesPage::new(data, window, cx))),
             PageType::Syncing => LauncherPage::Syncing(cx.new(|cx| SyncingPage::new(data, window, cx))),
-            PageType::Modrinth { installing_for } => {
-                let breadcrumb = breadcrumb.unwrap_or(Box::new(|| Breadcrumb::new().text_xl()));
-                let page = cx.new(|cx| ModrinthSearchPage::new(data, installing_for, breadcrumb, window, cx));
+            PageType::Modrinth {
+                installing_for,
+                project_type,
+            } => {
+                let page = cx.new(|cx| ModrinthSearchPage::new(installing_for, project_type, path, data, window, cx));
                 LauncherPage::Modrinth { installing_for, page }
             },
-            PageType::InstancePage(id, subpage) => {
-                let breadcrumb = breadcrumb.unwrap_or(Box::new(|| {
-                    Breadcrumb::new()
-                        .text_xl()
-                        .child(BreadcrumbItem::new("Instances").on_click(|_, window, cx| {
-                            root::switch_page(PageType::Instances, None, window, cx);
-                        }))
-                }));
-                LauncherPage::InstancePage(
-                    id,
-                    subpage,
-                    cx.new(|cx| InstancePage::new(id, subpage, data, breadcrumb, window, cx)),
-                )
-            },
+            PageType::InstancePage(id, subpage) => LauncherPage::InstancePage(
+                id,
+                subpage,
+                cx.new(|cx| InstancePage::new(id, subpage, path, data, window, cx)),
+            ),
         }
     }
 
     pub fn switch_page(
         &mut self,
         page: PageType,
-        breadcrumb: Option<Box<dyn Fn() -> Breadcrumb>>,
+        breadcrumbs: &[PageType],
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if self.page.page_type() == page {
             return;
         }
-        InterfaceConfig::get_mut(cx).main_page = page.to_serialized(&self.data, cx);
-        self.page = Self::create_page(&self.data, page, breadcrumb, window, cx);
+
+        let main_page = page.to_serialized(&self.data, cx);
+        let page_path = breadcrumbs.iter().map(|page| page.to_serialized(&self.data, cx)).collect();
+        let config = InterfaceConfig::get_mut(cx);
+        config.main_page = main_page;
+        config.page_path = page_path;
+
+        self.page = Self::create_page(&self.data, page, breadcrumbs, window, cx);
         cx.notify();
     }
 }
@@ -270,21 +281,35 @@ impl Render for LauncherUI {
                 SidebarMenuItem::new("Instances")
                     .active(page_type == PageType::Instances)
                     .on_click(cx.listener(|launcher, _, window, cx| {
-                        launcher.switch_page(PageType::Instances, None, window, cx);
+                        launcher.switch_page(PageType::Instances, &[], window, cx);
                     })),
                 SidebarMenuItem::new("Syncing")
                     .active(page_type == PageType::Syncing)
                     .on_click(cx.listener(|launcher, _, window, cx| {
-                        launcher.switch_page(PageType::Syncing, None, window, cx);
+                        launcher.switch_page(PageType::Syncing, &[], window, cx);
                     })),
             ]),
         );
 
         let launcher_group = SidebarGroup::new("Content").child(
             SidebarMenu::new().children([SidebarMenuItem::new("Modrinth")
-                .active(page_type == PageType::Modrinth { installing_for: None })
+                .active(
+                    page_type
+                        == PageType::Modrinth {
+                            installing_for: None,
+                            project_type: None,
+                        },
+                )
                 .on_click(cx.listener(|launcher, _, window, cx| {
-                    launcher.switch_page(PageType::Modrinth { installing_for: None }, None, window, cx);
+                    launcher.switch_page(
+                        PageType::Modrinth {
+                            installing_for: None,
+                            project_type: None,
+                        },
+                        &[],
+                        window,
+                        cx,
+                    );
                 }))]),
         );
 
@@ -308,7 +333,7 @@ impl Render for LauncherUI {
                         .on_click(cx.listener(move |launcher, _, window, cx| {
                             launcher.switch_page(
                                 PageType::InstancePage(id, InstanceSubpageType::Quickplay),
-                                None,
+                                &[PageType::Instances],
                                 window,
                                 cx,
                             );

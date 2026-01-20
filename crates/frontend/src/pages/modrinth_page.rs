@@ -1,6 +1,6 @@
 use std::{ops::Range, sync::{atomic::AtomicBool, Arc}, time::Duration};
 
-use bridge::{instance::{AtomicContentUpdateStatus, ContentUpdateStatus, InstanceID, InstanceModID, InstanceModSummary}, message::MessageToBackend, meta::MetadataRequest, modal_action::ModalAction};
+use bridge::{instance::{AtomicContentUpdateStatus, ContentUpdateStatus, InstanceID, InstanceContentID, InstanceContentSummary}, message::MessageToBackend, meta::MetadataRequest, modal_action::ModalAction};
 use gpui::{prelude::*, *};
 use gpui_component::{
     ActiveTheme, Icon, IconName, Selectable, StyledExt, WindowExt, breadcrumb::Breadcrumb, button::{Button, ButtonGroup, ButtonVariant, ButtonVariants}, checkbox::Checkbox, h_flex, input::{Input, InputEvent, InputState}, notification::NotificationType, scroll::{ScrollableElement, Scrollbar}, skeleton::Skeleton, tooltip::Tooltip, v_flex
@@ -11,7 +11,7 @@ use schema::{content::ContentSource, loader::Loader, modrinth::{
 }};
 
 use crate::{
-    component::error_alert::ErrorAlert, entity::{
+    component::{error_alert::ErrorAlert, page_path::PagePath}, entity::{
         DataEntities, instance::InstanceEntries, metadata::{AsMetadataResult, FrontendMetadata, FrontendMetadataResult}
     }, interface_config::InterfaceConfig, ts, ui
 };
@@ -19,7 +19,7 @@ use crate::{
 pub struct ModrinthSearchPage {
     data: DataEntities,
     hits: Vec<ModrinthHit>,
-    breadcrumb: Box<dyn Fn() -> Breadcrumb>,
+    page_path: PagePath,
     install_for: Option<InstanceID>,
     loading: Option<Subscription>,
     pending_clear: bool,
@@ -40,12 +40,12 @@ pub struct ModrinthSearchPage {
 }
 
 struct InstalledMod {
-    mod_id: InstanceModID,
+    mod_id: InstanceContentID,
     status: Arc<AtomicContentUpdateStatus>,
 }
 
 impl ModrinthSearchPage {
-    pub fn new(data: &DataEntities, install_for: Option<InstanceID>, breadcrumb: Box<dyn Fn() -> Breadcrumb>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(install_for: Option<InstanceID>, project_type: Option<ModrinthProjectType>, page_path: PagePath, data: &DataEntities, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let search_state = cx.new(|cx| InputState::new(window, cx).placeholder("Search mods...").clean_on_escape());
 
         let mut can_install_latest = false;
@@ -65,7 +65,7 @@ impl ModrinthSearchPage {
                     let installed = installed_mods_by_project.entry(project.clone()).or_default();
                     installed.push(InstalledMod {
                         mod_id: summary.id,
-                        status: summary.mod_summary.update_status.clone(),
+                        status: summary.content_summary.update_status.clone(),
                     })
                 }
             }
@@ -73,10 +73,20 @@ impl ModrinthSearchPage {
 
         let _search_input_subscription = cx.subscribe_in(&search_state, window, Self::on_search_input_event);
 
+        let mut filter_project_type = if let Some(project_type) = project_type {
+            InterfaceConfig::get_mut(cx).modrinth_page_project_type = project_type;
+            project_type
+        } else {
+            InterfaceConfig::get(cx).modrinth_page_project_type
+        };
+        if filter_project_type == ModrinthProjectType::Other {
+            filter_project_type = ModrinthProjectType::Mod;
+        }
+
         let mut page = Self {
             data: data.clone(),
             hits: Vec::new(),
-            breadcrumb,
+            page_path,
             install_for,
             loading: None,
             pending_clear: false,
@@ -84,7 +94,7 @@ impl ModrinthSearchPage {
             search_state,
             _search_input_subscription,
             _delayed_clear_task: Task::ready(()),
-            filter_project_type: ModrinthProjectType::Mod,
+            filter_project_type,
             filter_loaders: FxHashSet::default(),
             filter_categories: FxHashSet::default(),
             show_categories: Arc::new(AtomicBool::new(false)),
@@ -126,6 +136,7 @@ impl ModrinthSearchPage {
         if self.filter_project_type == project_type {
             return;
         }
+        InterfaceConfig::get_mut(cx).modrinth_page_project_type = project_type;
         self.filter_project_type = project_type;
         self.filter_categories.clear();
         self.search_state.update(cx, |state, cx| {
@@ -439,9 +450,9 @@ impl ModrinthSearchPage {
                                             PrimaryAction::Update(ref ids) => {
                                                 for id in ids {
                                                     let modal_action = ModalAction::default();
-                                                    data.backend_handle.send(MessageToBackend::UpdateMod {
+                                                    data.backend_handle.send(MessageToBackend::UpdateContent {
                                                         instance: install_for.unwrap(),
-                                                        mod_id: *id,
+                                                        content_id: *id,
                                                         modal_action: modal_action.clone()
                                                     });
                                                     crate::modals::generic::show_notification(window, cx,
@@ -583,7 +594,7 @@ enum PrimaryAction {
     CheckForUpdates,
     ErrorCheckingForUpdates,
     UpToDate,
-    Update(Vec<InstanceModID>),
+    Update(Vec<InstanceContentID>),
 }
 
 impl PrimaryAction {
@@ -767,13 +778,8 @@ impl Render for ModrinthSearchPage {
             .when_some(loader_button_group, |this, group| this.child(group))
             .child(category);
 
-        let breadcrumb = if self.install_for.is_some() {
-            (self.breadcrumb)().child("Add from Modrinth")
-        } else {
-            (self.breadcrumb)().child("Modrinth")
-        };
-
-        ui::page(cx, breadcrumb).child(h_flex().size_full().p_3().gap_3().child(parameters).child(content))
+        ui::page(cx, self.page_path.create_breadcrumb(&self.data, cx))
+            .child(h_flex().size_full().p_3().gap_3().child(parameters).child(content))
     }
 }
 

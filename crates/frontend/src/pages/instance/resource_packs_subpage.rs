@@ -18,19 +18,19 @@ use crate::{component::content_list::ContentListDelegate, entity::instance::Inst
 
 use super::instance_page::InstanceSubpageType;
 
-pub struct InstanceModsSubpage {
+pub struct InstanceResourcePacksSubpage {
     instance: InstanceID,
     instance_title: SharedString,
     instance_loader: Loader,
     instance_version: Ustr,
     backend_handle: BackendHandle,
-    mods_state: Arc<AtomicBridgeDataLoadState>,
-    mod_list: Entity<ListState<ContentListDelegate>>,
+    resource_packs_state: Arc<AtomicBridgeDataLoadState>,
+    resource_pack_list: Entity<ListState<ContentListDelegate>>,
     load_serial: AtomicOptionSerial,
     _add_from_file_task: Option<Task<()>>,
 }
 
-impl InstanceModsSubpage {
+impl InstanceResourcePacksSubpage {
     pub fn new(
         instance: &Entity<InstanceEntry>,
         backend_handle: BackendHandle,
@@ -43,21 +43,21 @@ impl InstanceModsSubpage {
         let instance_version = instance.configuration.minecraft_version;
         let instance_id = instance.id;
 
-        let mods_state = Arc::clone(&instance.mods_state);
+        let resource_packs_state = Arc::clone(&instance.resource_packs_state);
 
-        let mut mods_list_delegate = ContentListDelegate::new(instance_id, backend_handle.clone());
-        mods_list_delegate.set_content(instance.mods.read(cx));
+        let mut resource_packs_list_delegate = ContentListDelegate::new(instance_id, backend_handle.clone());
+        resource_packs_list_delegate.set_content(instance.resource_packs.read(cx));
 
-        let mods = instance.mods.clone();
+        let resource_packs = instance.resource_packs.clone();
 
-        let mod_list = cx.new(move |cx| {
-            cx.observe(&mods, |list: &mut ListState<ContentListDelegate>, mods, cx| {
-                let actual_mods = mods.read(cx);
-                list.delegate_mut().set_content(actual_mods);
+        let resource_pack_list = cx.new(move |cx| {
+            cx.observe(&resource_packs, |list: &mut ListState<ContentListDelegate>, resource_packs, cx| {
+                let actual_resource_packs = resource_packs.read(cx);
+                list.delegate_mut().set_content(actual_resource_packs);
                 cx.notify();
             }).detach();
 
-            ListState::new(mods_list_delegate, window, cx).selectable(false).searchable(true)
+            ListState::new(resource_packs_list_delegate, window, cx).selectable(false).searchable(true)
         });
 
         Self {
@@ -66,28 +66,28 @@ impl InstanceModsSubpage {
             instance_loader,
             instance_version,
             backend_handle,
-            mods_state,
-            mod_list,
+            resource_packs_state,
+            resource_pack_list,
             load_serial: AtomicOptionSerial::default(),
             _add_from_file_task: None,
         }
     }
 }
 
-impl Render for InstanceModsSubpage {
+impl Render for InstanceResourcePacksSubpage {
     fn render(&mut self, _window: &mut gpui::Window, cx: &mut gpui::Context<Self>) -> impl gpui::IntoElement {
         let theme = cx.theme();
 
-        let state = self.mods_state.load(Ordering::SeqCst);
+        let state = self.resource_packs_state.load(Ordering::SeqCst);
         if state.should_send_load_request() {
-            self.backend_handle.send_with_serial(MessageToBackend::RequestLoadMods { id: self.instance }, &self.load_serial);
+            self.backend_handle.send_with_serial(MessageToBackend::RequestLoadResourcePacks { id: self.instance }, &self.load_serial);
         }
 
         let header = h_flex()
             .gap_3()
             .mb_1()
             .ml_1()
-            .child(div().text_lg().child("Mods"))
+            .child(div().text_lg().child("Resource Packs"))
             .child(Button::new("update").label("Check for updates").success().compact().small().on_click({
                 let backend_handle = self.backend_handle.clone();
                 let instance_id = self.instance;
@@ -100,9 +100,9 @@ impl Render for InstanceModsSubpage {
                 move |_, window, cx| {
                     let page = crate::ui::PageType::Modrinth {
                         installing_for: Some(instance),
-                        project_type: Some(ModrinthProjectType::Mod)
+                        project_type: Some(ModrinthProjectType::Resourcepack)
                     };
-                    let path = &[PageType::Instances, PageType::InstancePage(instance, InstanceSubpageType::Mods)];
+                    let path = &[PageType::Instances, PageType::InstancePage(instance, InstanceSubpageType::ResourcePacks)];
                     root::switch_page(page, path, window, cx);
                 }
             }))
@@ -114,7 +114,7 @@ impl Render for InstanceModsSubpage {
                         files: true,
                         directories: false,
                         multiple: true,
-                        prompt: Some("Select mods to install".into())
+                        prompt: Some("Select resource packs to install".into())
                     });
 
                     let backend_handle = backend_handle.clone();
@@ -133,7 +133,7 @@ impl Render for InstanceModsSubpage {
                                         files: paths.into_iter().filter_map(|path| {
                                             Some(ContentInstallFile {
                                                 replace_old: None,
-                                                path: bridge::install::ContentInstallPath::Raw(Path::new("mods").join(path.file_name()?).into()),
+                                                path: bridge::install::ContentInstallPath::Raw(Path::new("resourcepacks").join(path.file_name()?).into()),
                                                 download: ContentDownload::File { path },
                                                 content_source: ContentSource::Manual,
                                             })
@@ -157,17 +157,17 @@ impl Render for InstanceModsSubpage {
                 })
             }));
 
-        let mod_list = self.mod_list.clone();
+        let resource_pack_list = self.resource_pack_list.clone();
         v_flex().p_4().size_full().child(header).child(
             div()
-                .id("mod-list-area")
+                .id("pack-list-area")
                 .size_full()
                 .border_1()
                 .rounded(theme.radius)
                 .border_color(theme.border)
-                .child(self.mod_list.clone())
+                .child(self.resource_pack_list.clone())
                 .on_click(move |_, _, cx| {
-                    cx.update_entity(&mod_list, |list, _| {
+                    cx.update_entity(&resource_pack_list, |list, _| {
                         list.delegate_mut().clear_selection();
                     })
                 }),

@@ -2,14 +2,14 @@ use std::{
     io::{BufRead, Cursor, Read, Write}, path::{Path, PathBuf}, sync::Arc
 };
 
-use bridge::{instance::{AtomicContentUpdateStatus, ContentUpdateStatus, LoaderSpecificModSummary, ModSummary}, safe_path::SafePath};
+use bridge::{instance::{AtomicContentUpdateStatus, ContentUpdateStatus, ContentType, ContentSummary}, safe_path::SafePath};
 use image::imageops::FilterType;
 use indexmap::IndexMap;
 use parking_lot::{RwLock, RwLockReadGuard};
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use rc_zip_sync::EntryHandle;
 use rustc_hash::{FxHashMap, FxHashSet};
-use schema::{content::ContentSource, fabric_mod::{FabricModJson, Icon, Person}, forge_mod::{JarJarMetadata, ModsToml}, modrinth::{ModrinthFile, ModrinthSideRequirement}, mrpack::ModrinthIndexJson};
+use schema::{content::ContentSource, fabric_mod::{FabricModJson, Icon, Person}, forge_mod::{JarJarMetadata, ModsToml}, modrinth::{ModrinthFile, ModrinthSideRequirement}, mrpack::ModrinthIndexJson, resourcepack::PackMcmeta};
 use serde::{Deserialize, Serialize};
 use serde_with::{serde_as, DeserializeAs};
 use sha1::{Digest, Sha1};
@@ -41,7 +41,7 @@ impl ModUpdateAction {
 pub struct ModMetadataManager {
     content_library_dir: Arc<Path>,
     sources_dir: PathBuf,
-    by_hash: RwLock<FxHashMap<[u8; 20], Option<Arc<ModSummary>>>>,
+    by_hash: RwLock<FxHashMap<[u8; 20], Option<Arc<ContentSummary>>>>,
     content_sources: RwLock<ContentSources>,
     parents_by_missing_child: RwLock<FxHashMap<[u8; 20], Vec<[u8; 20]>>>,
     pub updates: RwLock<FxHashMap<[u8; 20], ModUpdateAction>>,
@@ -98,12 +98,12 @@ impl ModMetadataManager {
         }
     }
 
-    pub fn get_path(self: &Arc<Self>, path: &Path) -> Option<Arc<ModSummary>> {
+    pub fn get_path(self: &Arc<Self>, path: &Path) -> Option<Arc<ContentSummary>> {
         let mut file = std::fs::File::open(path).ok()?;
         self.get_file(&mut file)
     }
 
-    pub fn get_file(self: &Arc<Self>, file: &mut std::fs::File) -> Option<Arc<ModSummary>> {
+    pub fn get_file(self: &Arc<Self>, file: &mut std::fs::File) -> Option<Arc<ContentSummary>> {
         let mut hasher = Sha1::new();
         let _ = std::io::copy(file, &mut hasher).ok()?;
         let actual_hash: [u8; 20] = hasher.finalize().into();
@@ -119,7 +119,7 @@ impl ModMetadataManager {
         summary
     }
 
-    pub fn get_bytes(self: &Arc<Self>, bytes: &[u8]) -> Option<Arc<ModSummary>> {
+    pub fn get_bytes(self: &Arc<Self>, bytes: &[u8]) -> Option<Arc<ContentSummary>> {
         let mut hasher = Sha1::new();
         hasher.write_all(bytes).ok()?;
         let actual_hash: [u8; 20] = hasher.finalize().into();
@@ -135,7 +135,7 @@ impl ModMetadataManager {
         summary
     }
 
-    fn put(self: &Arc<Self>, hash: [u8; 20], summary: Option<Arc<ModSummary>>) {
+    fn put(self: &Arc<Self>, hash: [u8; 20], summary: Option<Arc<ContentSummary>>) {
         self.by_hash.write().insert(hash, summary.clone());
 
         if let Some(parents) = self.parents_by_missing_child.write().remove(&hash) {
@@ -147,19 +147,21 @@ impl ModMetadataManager {
         }
     }
 
-    fn load_mod_summary<R: rc_zip_sync::ReadZip>(self: &Arc<Self>, hash: [u8; 20], file: &R, allow_children: bool) -> Option<Arc<ModSummary>> {
+    fn load_mod_summary<R: rc_zip_sync::ReadZip>(self: &Arc<Self>, hash: [u8; 20], file: &R, allow_children: bool) -> Option<Arc<ContentSummary>> {
         let archive = file.read_zip().ok()?;
 
         if let Some(file) = archive.by_name("fabric.mod.json") {
             self.load_fabric_mod(hash, &archive, file)
         } else if let Some(file) = archive.by_name("META-INF/mods.toml") {
-            self.load_forge_mod(hash, &archive, file)
+            self.load_forge_mod(hash, &archive, file, ContentType::Forge)
         } else if let Some(file) = archive.by_name("META-INF/neoforge.mods.toml") {
-            self.load_forge_mod(hash, &archive, file)
+            self.load_forge_mod(hash, &archive, file, ContentType::NeoForge)
         } else if let Some(file) = archive.by_name("META-INF/jarjar/metadata.json") {
             self.load_jarjar(hash, &archive, file)
         } else if let Some(file) = archive.by_name("META-INF/MANIFEST.MF") {
             self.load_from_java_manifest(hash, &archive, file)
+        } else if let Some(file) = archive.by_name("pack.mcmeta") {
+            self.load_from_pack_mcmeta(hash, &archive, file)
         } else if allow_children && let Some(file) = archive.by_name("modrinth.index.json") {
             self.load_modrinth_modpack(hash, &archive, file)
         } else {
@@ -167,7 +169,7 @@ impl ModMetadataManager {
         }
     }
 
-    fn load_fabric_mod<R: rc_zip_sync::HasCursor>(self: &Arc<Self>, hash: [u8; 20], archive: &rc_zip_sync::ArchiveHandle<R>, file: EntryHandle<'_, R>) -> Option<Arc<ModSummary>> {
+    fn load_fabric_mod<R: rc_zip_sync::HasCursor>(self: &Arc<Self>, hash: [u8; 20], archive: &rc_zip_sync::ArchiveHandle<R>, file: EntryHandle<'_, R>) -> Option<Arc<ContentSummary>> {
         let mut bytes = file.bytes().ok()?;
 
         // Some mods violate the JSON spec by using raw newline characters inside strings (e.g. BetterGrassify)
@@ -207,24 +209,19 @@ impl ModMetadataManager {
             "".into()
         };
 
-        let mut lowercase_search_key = fabric_mod_json.id.to_lowercase();
-        lowercase_search_key.push_str("$$");
-        lowercase_search_key.push_str(&name.to_lowercase());
-
-        Some(Arc::new(ModSummary {
-            id: fabric_mod_json.id,
+        Some(Arc::new(ContentSummary {
+            id: Some(fabric_mod_json.id),
             hash,
-            name,
-            lowercase_search_key: lowercase_search_key.into(),
+            name: Some(name),
             authors,
             version_str: format!("v{}", fabric_mod_json.version).into(),
             png_icon,
             update_status: Arc::new(AtomicContentUpdateStatus::new(ContentUpdateStatus::Unknown)),
-            extra: LoaderSpecificModSummary::Fabric
+            extra: ContentType::Fabric
         }))
     }
 
-    fn load_forge_mod<R: rc_zip_sync::HasCursor>(self: &Arc<Self>, hash: [u8; 20], archive: &rc_zip_sync::ArchiveHandle<R>, file: EntryHandle<'_, R>) -> Option<Arc<ModSummary>> {
+    fn load_forge_mod<R: rc_zip_sync::HasCursor>(self: &Arc<Self>, hash: [u8; 20], archive: &rc_zip_sync::ArchiveHandle<R>, file: EntryHandle<'_, R>, extra: ContentType) -> Option<Arc<ContentSummary>> {
         let bytes = file.bytes().ok()?;
 
         let mods_toml: ModsToml = toml::from_slice(&bytes).inspect_err(|e| {
@@ -250,10 +247,6 @@ impl ModMetadataManager {
             "".into()
         };
 
-        let mut lowercase_search_key = first.mod_id.to_lowercase();
-        lowercase_search_key.push_str("$$");
-        lowercase_search_key.push_str(&name.to_lowercase());
-
         let mut version = format!("v{}", first.version.as_deref().unwrap_or("1"));
         if version.contains("${file.jarVersion}") {
             if let Some(manifest) = archive.by_name("META-INF/MANIFEST.MF") {
@@ -268,20 +261,19 @@ impl ModMetadataManager {
             }
         }
 
-        Some(Arc::new(ModSummary {
-            id: first.mod_id.clone(),
+        Some(Arc::new(ContentSummary {
+            id: Some(first.mod_id.clone()),
             hash,
-            name,
-            lowercase_search_key: lowercase_search_key.into(),
+            name: Some(name),
             authors,
             version_str: version.into(),
             png_icon,
             update_status: Arc::new(AtomicContentUpdateStatus::new(ContentUpdateStatus::Unknown)),
-            extra: LoaderSpecificModSummary::Forge
+            extra,
         }))
     }
 
-    fn load_modrinth_modpack<R: rc_zip_sync::HasCursor>(self: &Arc<Self>, hash: [u8; 20], archive: &rc_zip_sync::ArchiveHandle<R>, file: EntryHandle<'_, R>) -> Option<Arc<ModSummary>> {
+    fn load_modrinth_modpack<R: rc_zip_sync::HasCursor>(self: &Arc<Self>, hash: [u8; 20], archive: &rc_zip_sync::ArchiveHandle<R>, file: EntryHandle<'_, R>) -> Option<Arc<ContentSummary>> {
         let modrinth_index_json: ModrinthIndexJson = serde_json::from_slice(&file.bytes().ok()?).inspect_err(|e| {
             eprintln!("Error parsing modrinth.index.json: {e}");
         }).ok()?;
@@ -313,8 +305,6 @@ impl ModMetadataManager {
             };
             overrides.insert(path, data.into());
         }
-
-        let lowercase_search_key = modrinth_index_json.name.to_lowercase();
 
         let summaries = modrinth_index_json.files.par_iter().map(|download| {
             if let Some(env) = download.env {
@@ -357,7 +347,6 @@ impl ModMetadataManager {
         let summaries: Vec<_> = summaries.collect();
 
         let mut png_icon = None;
-
         if let Some(icon) = archive.by_name("icon.png") {
             png_icon = load_icon(icon);
         }
@@ -370,16 +359,15 @@ impl ModMetadataManager {
             "".into()
         };
 
-        Some(Arc::new(ModSummary {
-            id: "".into(),
+        Some(Arc::new(ContentSummary {
+            id: None,
             hash,
-            name: modrinth_index_json.name,
-            lowercase_search_key: lowercase_search_key.into(),
+            name: Some(modrinth_index_json.name),
             authors,
             version_str: format!("v{}", modrinth_index_json.version_id).into(),
             png_icon,
             update_status: Arc::new(AtomicContentUpdateStatus::new(ContentUpdateStatus::Unknown)),
-            extra: LoaderSpecificModSummary::ModrinthModpack {
+            extra: ContentType::ModrinthModpack {
                 downloads: modrinth_index_json.files,
                 summaries: summaries.into(),
                 overrides: overrides.into_iter().collect(),
@@ -387,7 +375,7 @@ impl ModMetadataManager {
         }))
     }
 
-    fn load_jarjar<R: rc_zip_sync::HasCursor>(self: &Arc<Self>, hash: [u8; 20], archive: &rc_zip_sync::ArchiveHandle<R>, file: EntryHandle<'_, R>) -> Option<Arc<ModSummary>> {
+    fn load_jarjar<R: rc_zip_sync::HasCursor>(self: &Arc<Self>, hash: [u8; 20], archive: &rc_zip_sync::ArchiveHandle<R>, file: EntryHandle<'_, R>) -> Option<Arc<ContentSummary>> {
         let bytes = file.bytes().ok()?;
 
         let metadata_json: JarJarMetadata = serde_json::from_slice(&bytes).inspect_err(|e| {
@@ -411,7 +399,7 @@ impl ModMetadataManager {
         None
     }
 
-    fn load_from_java_manifest<R: rc_zip_sync::HasCursor>(self: &Arc<Self>, hash: [u8; 20], archive: &rc_zip_sync::ArchiveHandle<R>, file: EntryHandle<'_, R>) -> Option<Arc<ModSummary>> {
+    fn load_from_java_manifest<R: rc_zip_sync::HasCursor>(self: &Arc<Self>, hash: [u8; 20], archive: &rc_zip_sync::ArchiveHandle<R>, file: EntryHandle<'_, R>) -> Option<Arc<ContentSummary>> {
         let bytes = file.bytes().ok()?;
 
         let manifest_str = str::from_utf8(&bytes).ok()?;
@@ -444,16 +432,41 @@ impl ModMetadataManager {
             None
         };
 
-        Some(Arc::new(ModSummary {
-            id: name.clone(),
+        Some(Arc::new(ContentSummary {
+            id: None,
             hash,
-            name: name.clone(),
-            lowercase_search_key: name.clone(),
+            name: Some(name.clone()),
             authors: author.unwrap_or_default(),
             version_str: version.unwrap_or_default(),
             png_icon: None,
             update_status: Arc::new(AtomicContentUpdateStatus::new(ContentUpdateStatus::Unknown)),
-            extra: LoaderSpecificModSummary::JavaModule
+            extra: ContentType::JavaModule
+        }))
+    }
+
+    fn load_from_pack_mcmeta<R: rc_zip_sync::HasCursor>(self: &Arc<Self>, hash: [u8; 20], archive: &rc_zip_sync::ArchiveHandle<R>, file: EntryHandle<'_, R>) -> Option<Arc<ContentSummary>> {
+        let bytes = file.bytes().ok()?;
+
+        let pack_mcmeta: PackMcmeta = serde_json::from_slice(&bytes).inspect_err(|e| {
+            eprintln!("Error parsing jarjar/metadata.json: {e}");
+        }).ok()?;
+
+        drop(file);
+
+        let mut png_icon = None;
+        if let Some(icon) = archive.by_name("pack.png") {
+            png_icon = load_icon(icon);
+        }
+
+        Some(Arc::new(ContentSummary {
+            id: None,
+            hash,
+            name: None,
+            authors: "".into(),
+            version_str: pack_mcmeta.pack.description,
+            png_icon,
+            update_status: Arc::new(AtomicContentUpdateStatus::new(ContentUpdateStatus::Unknown)),
+            extra: ContentType::ResourcePack
         }))
     }
 }

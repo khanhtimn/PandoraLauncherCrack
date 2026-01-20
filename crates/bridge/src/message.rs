@@ -7,7 +7,7 @@ use uuid::Uuid;
 
 use crate::{
     account::Account, game_output::GameOutputLogLevel, install::ContentInstall, instance::{
-        InstanceID, InstanceModID, InstanceModSummary, InstanceServerSummary, InstanceStatus, InstanceWorldSummary,
+        InstanceID, InstanceContentID, InstanceContentSummary, InstanceServerSummary, InstanceStatus, InstanceWorldSummary,
     }, keep_alive::{KeepAlive, KeepAliveHandle}, meta::{MetadataRequest, MetadataResult}, modal_action::ModalAction
 };
 
@@ -70,30 +70,36 @@ pub enum MessageToBackend {
     RequestLoadMods {
         id: InstanceID,
     },
-    SetModEnabled {
+    RequestLoadResourcePacks {
         id: InstanceID,
-        mod_ids: Vec<InstanceModID>,
+    },
+    SetContentEnabled {
+        id: InstanceID,
+        content_ids: Vec<InstanceContentID>,
         enabled: bool,
     },
-    SetModChildEnabled {
+    SetContentChildEnabled {
         id: InstanceID,
-        mod_id: InstanceModID,
+        content_id: InstanceContentID,
         path: Arc<str>,
         enabled: bool,
     },
-    DeleteMod {
+    DeleteContent {
         id: InstanceID,
-        mod_ids: Vec<InstanceModID>,
+        content_ids: Vec<InstanceContentID>,
     },
     InstallContent {
         content: ContentInstall,
         modal_action: ModalAction,
     },
     DownloadAllMetadata,
-    UpdateCheck { instance: InstanceID, modal_action: ModalAction },
-    UpdateMod {
+    UpdateCheck {
         instance: InstanceID,
-        mod_id: InstanceModID,
+        modal_action: ModalAction
+    },
+    UpdateContent {
+        instance: InstanceID,
+        content_id: InstanceContentID,
         modal_action: ModalAction,
     },
     Sleep5s,
@@ -150,6 +156,7 @@ pub enum MessageToFrontend {
         worlds_state: Arc<AtomicBridgeDataLoadState>,
         servers_state: Arc<AtomicBridgeDataLoadState>,
         mods_state: Arc<AtomicBridgeDataLoadState>,
+        resource_packs_state: Arc<AtomicBridgeDataLoadState>,
     },
     InstanceRemoved {
         id: InstanceID,
@@ -171,7 +178,11 @@ pub enum MessageToFrontend {
     },
     InstanceModsUpdated {
         id: InstanceID,
-        mods: Arc<[InstanceModSummary]>,
+        mods: Arc<[InstanceContentSummary]>,
+    },
+    InstanceResourcePacksUpdated {
+        id: InstanceID,
+        resource_packs: Arc<[InstanceContentSummary]>,
     },
     CreateGameOutputWindow {
         id: usize,
