@@ -12,6 +12,7 @@ use auth::{
 use bridge::{
     handle::{BackendHandle, BackendReceiver, FrontendHandle}, install::{ContentDownload, ContentInstall, ContentInstallFile, ContentInstallPath}, instance::{InstanceID, InstanceContentSummary, InstanceServerSummary, InstanceWorldSummary, ContentType}, message::MessageToFrontend, modal_action::{ModalAction, ModalActionVisitUrl, ProgressTracker, ProgressTrackerFinishType}, safe_path::SafePath
 };
+use indexmap::IndexSet;
 use parking_lot::RwLock;
 use reqwest::{StatusCode, redirect::Policy};
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -71,11 +72,13 @@ pub fn start(launcher_dir: PathBuf, send: FrontendHandle, self_handle: BackendHa
     let mut state_file_watching = BackendStateFileWatching {
         watcher,
         watching: HashMap::new(),
+        symlink_src_to_links: Default::default(),
+        symlink_link_to_src: Default::default(),
     };
 
     // Create initial directories
     let _ = std::fs::create_dir_all(&directories.instances_dir);
-    state_file_watching.try_watch_filesystem(&directories.root_launcher_dir, WatchTarget::RootDir);
+    state_file_watching.watch_filesystem(directories.root_launcher_dir.clone(), WatchTarget::RootDir);
 
     // Load accounts
     let account_info = Persistent::load(directories.accounts_json.clone());
@@ -131,8 +134,10 @@ pub struct BackendStateInstances {
 }
 
 pub struct BackendStateFileWatching {
-    pub watcher: notify_debouncer_full::Debouncer<notify::RecommendedWatcher, notify_debouncer_full::RecommendedCache>,
-    pub watching: HashMap<Arc<Path>, WatchTarget>,
+    watcher: notify_debouncer_full::Debouncer<notify::RecommendedWatcher, notify_debouncer_full::RecommendedCache>,
+    watching: HashMap<Arc<Path>, WatchTarget>,
+    symlink_src_to_links: HashMap<Arc<Path>, IndexSet<Arc<Path>>>,
+    symlink_link_to_src: HashMap<Arc<Path>, Arc<Path>>,
 }
 
 #[derive(Clone)]
@@ -174,7 +179,7 @@ impl BackendState {
     pub async fn load_all_instances(&mut self) {
         let mut paths_with_time = Vec::new();
 
-        self.file_watching.write().try_watch_filesystem(&self.directories.instances_dir, WatchTarget::InstancesDir);
+        self.file_watching.write().watch_filesystem(self.directories.instances_dir.clone(), WatchTarget::InstancesDir);
         for entry in std::fs::read_dir(&self.directories.instances_dir).unwrap() {
             let Ok(entry) = entry else {
                 eprintln!("Error reading directory in instances folder: {:?}", entry.unwrap_err());
@@ -213,13 +218,9 @@ impl BackendState {
         for (path, _) in paths_with_time {
             let success = self.load_instance_from_path(&path, true, false);
             if !success {
-                self.watch_filesystem(&path, WatchTarget::InvalidInstanceDir);
+                self.file_watching.write().watch_filesystem(path.into(), WatchTarget::InvalidInstanceDir);
             }
         }
-    }
-
-    pub fn watch_filesystem(&self, path: &Path, target: WatchTarget) {
-        self.file_watching.write().watch_filesystem(path, target, &self.send);
     }
 
     pub fn remove_instance(&mut self, id: InstanceID) {
@@ -301,7 +302,7 @@ impl BackendState {
             instance.id
         };
 
-        self.watch_filesystem(path, WatchTarget::InstanceDir { id: instance_id });
+        self.file_watching.write().watch_filesystem(path.into(), WatchTarget::InstanceDir { id: instance_id });
         true
     }
 
@@ -803,18 +804,15 @@ impl BackendState {
             let mut file_watching = self.file_watching.write();
             if !instance.watching_dot_minecraft {
                 instance.watching_dot_minecraft = true;
-                if file_watching.watcher.watch(&instance.dot_minecraft_path, notify::RecursiveMode::NonRecursive).is_ok() {
-                    file_watching.watching.insert(instance.dot_minecraft_path.clone(), WatchTarget::InstanceDotMinecraftDir {
-                        id: instance.id,
-                    });
-                }
+                file_watching.watch_filesystem(instance.dot_minecraft_path.clone(), WatchTarget::InstanceDotMinecraftDir {
+                    id: instance.id,
+                });
             }
             if !instance.watching_server_dat {
                 instance.watching_server_dat = true;
-                let server_dat = instance.server_dat_path.clone();
-                if file_watching.watcher.watch(&server_dat, notify::RecursiveMode::NonRecursive).is_ok() {
-                    file_watching.watching.insert(server_dat.clone(), WatchTarget::ServersDat { id: instance.id });
-                }
+                file_watching.watch_filesystem(instance.server_dat_path.clone(), WatchTarget::ServersDat {
+                    id: instance.id,
+                });
             }
         }
 
@@ -836,19 +834,17 @@ impl BackendState {
             let mut file_watching = self.file_watching.write();
             if !instance.watching_dot_minecraft {
                 instance.watching_dot_minecraft = true;
-                if file_watching.watcher.watch(&instance.dot_minecraft_path, notify::RecursiveMode::NonRecursive).is_ok() {
-                    file_watching.watching.insert(instance.dot_minecraft_path.clone(), WatchTarget::InstanceDotMinecraftDir {
-                        id: instance.id,
-                    });
-                }
+                file_watching.watch_filesystem(instance.dot_minecraft_path.clone(), WatchTarget::InstanceDotMinecraftDir {
+                    id: instance.id,
+                });
             }
             let content_state = &mut instance.content_state[folder];
             if !content_state.watching_path {
                 content_state.watching_path = true;
-                let path = content_state.path.clone();
-                if file_watching.watcher.watch(&path, notify::RecursiveMode::NonRecursive).is_ok() {
-                    file_watching.watching.insert(path.clone(), WatchTarget::InstanceContentDir { id: instance.id, folder });
-                }
+                file_watching.watch_filesystem(content_state.path.clone(), WatchTarget::InstanceContentDir {
+                    id: instance.id,
+                    folder
+                });
             }
         }
 
@@ -879,18 +875,15 @@ impl BackendState {
             let mut file_watching = self.file_watching.write();
             if !instance.watching_dot_minecraft {
                 instance.watching_dot_minecraft = true;
-                if file_watching.watcher.watch(&instance.dot_minecraft_path, notify::RecursiveMode::NonRecursive).is_ok() {
-                    file_watching.watching.insert(instance.dot_minecraft_path.clone(), WatchTarget::InstanceDotMinecraftDir {
-                        id: instance.id,
-                    });
-                }
+                file_watching.watch_filesystem(instance.dot_minecraft_path.clone(), WatchTarget::InstanceDotMinecraftDir {
+                    id: instance.id,
+                });
             }
             if !instance.watching_saves_dir {
                 instance.watching_saves_dir = true;
-                let saves = instance.saves_path.clone();
-                if file_watching.watcher.watch(&saves, notify::RecursiveMode::NonRecursive).is_ok() {
-                    file_watching.watching.insert(saves.clone(), WatchTarget::InstanceSavesDir { id: instance.id });
-                }
+                file_watching.watch_filesystem(instance.saves_path.clone(), WatchTarget::InstanceSavesDir {
+                    id: instance.id,
+                });
             }
         }
 
@@ -904,11 +897,9 @@ impl BackendState {
 
             let mut file_watching = self.file_watching.write();
             for summary in worlds.iter() {
-                if file_watching.watcher.watch(&summary.level_path, notify::RecursiveMode::NonRecursive).is_ok() {
-                    file_watching.watching.insert(summary.level_path.clone(), WatchTarget::InstanceWorldDir {
-                        id,
-                    });
-                }
+                file_watching.watch_filesystem(summary.level_path.clone(), WatchTarget::InstanceWorldDir {
+                    id,
+                });
             }
         }
 
@@ -950,7 +941,7 @@ impl BackendState {
             return None;
         }
 
-        self.watch_filesystem(&self.directories.instances_dir.clone(), WatchTarget::InstancesDir);
+        self.file_watching.write().watch_filesystem(self.directories.instances_dir.clone(), WatchTarget::InstancesDir);
 
         let instance_dir = self.directories.instances_dir.join(name);
 
@@ -1032,22 +1023,76 @@ impl BackendState {
 }
 
 impl BackendStateFileWatching {
-    pub fn try_watch_filesystem(&mut self, path: &Path, target: WatchTarget) -> bool {
-        if self.watcher.watch(path, notify::RecursiveMode::NonRecursive).is_err() {
-            return false;
-        }
-        self.watching.insert(path.into(), target);
-        true
-    }
+    pub fn watch_filesystem(&mut self, path: Arc<Path>, target: WatchTarget) {
+        let Ok(canonical) = path.canonicalize() else {
+            return;
+        };
+        let canonical: Arc<Path> = if canonical == &*path {
+            path.clone()
+        } else {
+            canonical.into()
+        };
 
-    pub fn watch_filesystem(&mut self, path: &Path, target: WatchTarget, send: &FrontendHandle) {
-        if self.watcher.watch(path, notify::RecursiveMode::NonRecursive).is_err() {
-            if path.exists() {
-                send.send_error(format!("Unable to watch directory {:?}, launcher may be out of sync with files!", path));
-            }
+        if self.watcher.watch(&path, notify::RecursiveMode::NonRecursive).is_err() {
             return;
         }
-        self.watching.insert(path.into(), target);
+        self.watching.insert(path.clone(), target);
+
+        if canonical != path {
+            self.symlink_src_to_links.entry(canonical.clone()).or_default().insert(path.clone());
+            self.symlink_link_to_src.insert(path, canonical);
+        }
+    }
+
+    pub fn get_target(&self, path: &Path) -> Option<&WatchTarget> {
+        self.watching.get(path)
+    }
+
+    pub fn remove(&mut self, path: &Path) -> Option<WatchTarget> {
+        if let Some(src) = self.symlink_link_to_src.remove(path) {
+            if let Some(links) = self.symlink_src_to_links.get_mut(&src) {
+                links.shift_remove(path);
+                if links.is_empty() {
+                    self.symlink_src_to_links.remove(&src);
+                }
+            }
+        }
+        self.watching.remove(path)
+    }
+
+    pub fn all_paths(&self, path: Arc<Path>) -> Vec<Arc<Path>> {
+        let mut paths = Vec::new();
+
+        if self.watching.contains_key(&path) {
+            paths.push(path.clone());
+        } else if let Some(parent) = path.parent() && self.watching.contains_key(parent) {
+            paths.push(path.clone());
+        }
+
+        if let Some(links) = self.symlink_src_to_links.get(&path) {
+            for link in links {
+                if self.watching.contains_key(link) {
+                    paths.push(link.clone());
+                } else if let Some(link_parent) = link.parent() && self.watching.contains_key(link_parent) {
+                    paths.push(link.clone());
+                }
+            }
+        }
+
+        if let Some(parent) = path.parent() && let Some(filename) = path.file_name() {
+            if let Some(links) = self.symlink_src_to_links.get(parent) {
+                for link_parent in links {
+                    let child_link: Arc<Path> = link_parent.join(filename).into();
+                    if self.watching.contains_key(&child_link) {
+                        paths.push(child_link.clone());
+                    } else if self.watching.contains_key(link_parent) {
+                        paths.push(child_link.clone());
+                    }
+                }
+            }
+        }
+
+        paths
     }
 }
 

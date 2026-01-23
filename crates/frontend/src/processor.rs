@@ -85,7 +85,7 @@ impl Processor {
                 InstanceEntries::set_resource_packs(&self.data.instances, id, resource_packs, cx);
             },
             MessageToFrontend::AddNotification { notification_type, message } => {
-                self.main_window_handle.update(cx, |_, window, cx| {
+                _ = self.main_window_handle.update(cx, |_, window, cx| {
                     let notification_type = match notification_type {
                         BridgeNotificationType::Success => NotificationType::Success,
                         BridgeNotificationType::Info => NotificationType::Info,
@@ -97,7 +97,7 @@ impl Processor {
                         notification = notification.autohide(false);
                     }
                     window.push_notification(notification, cx);
-                }).unwrap();
+                });
             },
             MessageToFrontend::Refresh => {
                 _ = self.main_window_handle.update(cx, |_, window, _| {
