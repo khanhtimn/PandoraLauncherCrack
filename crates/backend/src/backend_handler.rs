@@ -132,7 +132,7 @@ impl BackendState {
                         let result = child.kill();
                         if result.is_err() {
                             self.send.send_error("Failed to kill instance");
-                            eprintln!("Failed to kill instance: {:?}", result.unwrap_err());
+                            log::error!("Failed to kill instance: {:?}", result.unwrap_err());
                         }
 
                         self.send.send(instance.create_modify_message());
@@ -448,7 +448,7 @@ impl BackendState {
 
                                     if let ContentSource::ModrinthProject { ref project } = source {
                                         if &result.0.project_id != project {
-                                            eprintln!("Refusing to update {:?}, mismatched project ids: expected {}, got {}",
+                                            log::error!("Refusing to update {:?}, mismatched project ids: expected {}, got {}",
                                                 summary.content_summary.hash, &result.0.project_id, &project);
                                             return Ok(ModUpdateAction::ErrorNotFound);
                                         }
@@ -993,6 +993,19 @@ impl BackendState {
                     config.open_game_output_when_launching = value;
                 });
             },
+            MessageToBackend::CreateInstanceShortcut { id, path } => {
+                if let Some(instance) = self.instance_state.write().instances.get_mut(id) {
+                    let Ok(current_exe) = std::env::current_exe() else {
+                        return;
+                    };
+
+                    let args = &[
+                        "--run-instance",
+                        instance.name.as_str()
+                    ];
+                    crate::shortcut::create_shortcut(path, &format!("Launch {}", instance.name), &current_exe, args);
+                }
+            },
         }
     }
 
@@ -1010,7 +1023,7 @@ impl BackendState {
             match secret_storage.read_credentials(selected_account).await {
                 Ok(credentials) => credentials.unwrap_or_default(),
                 Err(error) => {
-                    eprintln!("Unable to read credentials from keychain: {error}");
+                    log::warn!("Unable to read credentials from keychain: {error}");
                     self.send.send_warning(
                         "Unable to read credentials from keychain. You will need to log in again",
                     );
@@ -1068,7 +1081,7 @@ impl BackendState {
         self.update_account_info_with_profile(&profile);
 
         if let Err(error) = secret_storage.write_credentials(profile.id, &credentials).await {
-            eprintln!("Unable to write credentials to keychain: {error}");
+            log::warn!("Unable to write credentials to keychain: {error}");
             self.send.send_warning("Unable to write credentials to keychain. You might need to fully log in again next time");
         }
 
@@ -1183,7 +1196,7 @@ impl BackendState {
                     }
 
                     if !known_executable_path {
-                        eprintln!("Warning: {}/{} doesn't contain known java executable", jre_component, platform_name);
+                        panic!("{}/{} doesn't contain known java executable", jre_component, platform_name);
                     }
                 }
             }
@@ -1237,7 +1250,7 @@ fn check_argument_expansions(argument: &str) {
             if let Some(end) = remaining.find('}') {
                 let to_expand = &argument[i+1..i+end];
                 if ArgumentExpansionKey::from_str(to_expand).is_none() {
-                    eprintln!("Unsupported argument: {:?}", to_expand);
+                    panic!("Unsupported argument: {:?}", to_expand);
                 }
             }
         } else {

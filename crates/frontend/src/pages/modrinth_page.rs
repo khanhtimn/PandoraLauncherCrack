@@ -210,7 +210,7 @@ impl ModrinthSearchPage {
 
         let mut facets = format!("[[\"project_type={}\"]", project_type);
 
-        let is_mod = self.filter_project_type == ModrinthProjectType::Mod && self.filter_project_type == ModrinthProjectType::Modpack;
+        let is_mod = self.filter_project_type == ModrinthProjectType::Mod || self.filter_project_type == ModrinthProjectType::Modpack;
         if !self.filter_loaders.is_empty() && is_mod {
             facets.push_str(",[");
 

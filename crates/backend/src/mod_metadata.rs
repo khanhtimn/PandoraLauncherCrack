@@ -180,7 +180,7 @@ impl ModMetadataManager {
         }
 
         let fabric_mod_json: FabricModJson = serde_json::from_slice(&bytes).inspect_err(|e| {
-            eprintln!("Error parsing fabric.mod.json: {e}");
+            log::error!("Error parsing fabric.mod.json: {e}");
         }).ok()?;
 
         drop(file);
@@ -225,7 +225,7 @@ impl ModMetadataManager {
         let bytes = file.bytes().ok()?;
 
         let mods_toml: ModsToml = toml::from_slice(&bytes).inspect_err(|e| {
-            eprintln!("Error parsing mods.toml/neoforge.mods.toml: {e}");
+            log::error!("Error parsing mods.toml/neoforge.mods.toml: {e}");
         }).ok()?;
 
         let Some(first) = mods_toml.mods.first() else {
@@ -275,7 +275,7 @@ impl ModMetadataManager {
 
     fn load_modrinth_modpack<R: rc_zip_sync::HasCursor>(self: &Arc<Self>, hash: [u8; 20], archive: &rc_zip_sync::ArchiveHandle<R>, file: EntryHandle<'_, R>) -> Option<Arc<ContentSummary>> {
         let modrinth_index_json: ModrinthIndexJson = serde_json::from_slice(&file.bytes().ok()?).inspect_err(|e| {
-            eprintln!("Error parsing modrinth.index.json: {e}");
+            log::error!("Error parsing modrinth.index.json: {e}");
         }).ok()?;
 
         let mut overrides: IndexMap<SafePath, Arc<[u8]>> = IndexMap::new();
@@ -379,7 +379,7 @@ impl ModMetadataManager {
         let bytes = file.bytes().ok()?;
 
         let metadata_json: JarJarMetadata = serde_json::from_slice(&bytes).inspect_err(|e| {
-            eprintln!("Error parsing jarjar/metadata.json: {e}");
+            log::error!("Error parsing jarjar/metadata.json: {e}");
         }).ok()?;
 
         drop(file);
@@ -448,7 +448,7 @@ impl ModMetadataManager {
         let bytes = file.bytes().ok()?;
 
         let pack_mcmeta: PackMcmeta = serde_json::from_slice(&bytes).inspect_err(|e| {
-            eprintln!("Error parsing jarjar/metadata.json: {e}");
+            log::error!("Error parsing jarjar/metadata.json: {e}");
         }).ok()?;
 
         drop(file);

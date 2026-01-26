@@ -367,10 +367,9 @@ impl BackendState {
     }
 
     async fn download_file_into_library_inner(&self, modal_action: &ModalAction, name: FilenameAndExtension, url: &Arc<str>, sha1: &Arc<str>, size: usize, semaphore: &tokio::sync::Semaphore) -> Result<(PathBuf, [u8; 20], Option<Arc<ContentSummary>>), ContentInstallError> {
-
         let mut expected_hash = [0u8; 20];
         let Ok(_) = hex::decode_to_slice(&**sha1, &mut expected_hash) else {
-            eprintln!("Content install has invalid sha1: {}", sha1);
+            log::warn!("Content install has invalid sha1: {}", sha1);
             return Err(ContentInstallError::InvalidHash(sha1.clone()));
         };
 

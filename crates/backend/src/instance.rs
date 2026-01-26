@@ -167,6 +167,8 @@ impl From<IoOrSerializationError> for InstanceLoadError {
 
 impl Instance {
     pub fn on_root_renamed(&mut self, path: &Path) {
+        log::info!("Instance {:?} has been moved to {:?}", self.root_path, path);
+
         self.name = path.file_name().unwrap().to_string_lossy().into_owned().into();
         self.root_path = path.into();
         self.configuration = Persistent::load_or(path.join("info_v1.json").into(), self.configuration.get().clone());
@@ -261,6 +263,8 @@ impl Instance {
     }
 
     fn load_worlds_all(saves_path: &Path) -> Arc<[InstanceWorldSummary]> {
+        log::info!("Loading all worlds in {:?}", saves_path);
+
         let Ok(directory) = std::fs::read_dir(&saves_path) else {
             return [].into();
         };
@@ -274,7 +278,7 @@ impl Instance {
             }
 
             let Ok(entry) = entry else {
-                eprintln!("Error reading directory in saves folder: {:?}", entry.unwrap_err());
+                log::error!("Error reading directory in saves folder: {:?}", entry.unwrap_err());
                 continue;
             };
             let path = entry.path();
@@ -289,7 +293,7 @@ impl Instance {
                     summaries.push(summary);
                 },
                 Err(err) => {
-                    eprintln!("Error loading world summary: {:?}", err);
+                    log::error!("Error loading world summary: {:?}", err);
                 },
             }
         }
@@ -300,6 +304,9 @@ impl Instance {
     }
 
     fn load_worlds_dirty(dirty: HashSet<Arc<Path>>, last: Arc<[InstanceWorldSummary]>) -> Arc<[InstanceWorldSummary]> {
+        log::debug!("Loading changed worlds");
+        log::trace!("Changed worlds: {:?}", dirty);
+
         let mut summaries = Vec::with_capacity(64);
 
         let mut count = 0;
@@ -320,7 +327,7 @@ impl Instance {
                     summaries.push(summary);
                 },
                 Err(err) => {
-                    eprintln!("Error loading world summary: {:?}", err);
+                    log::error!("Error loading world summary: {:?}", err);
                 },
             }
         }
@@ -398,6 +405,8 @@ impl Instance {
     }
 
     fn load_servers_all(server_dat_path: &Path) -> Arc<[InstanceServerSummary]> {
+        log::info!("Loading servers from {:?}", server_dat_path);
+
         if !server_dat_path.is_file() {
             return Arc::from([]);
         }
@@ -405,7 +414,7 @@ impl Instance {
         let result = match load_servers_summary(&server_dat_path) {
             Ok(summaries) => summaries.into(),
             Err(err) => {
-                eprintln!("Error loading servers: {:?}", err);
+                log::error!("Error loading servers: {:?}", err);
                 Arc::from([])
             },
         };
@@ -493,6 +502,8 @@ impl Instance {
     }
 
     fn load_content_all(path: &Path, mod_metadata_manager: Arc<ModMetadataManager>) -> Vec<InstanceContentSummary> {
+        log::info!("Loading all content from {:?}", path);
+
         let Ok(directory) = std::fs::read_dir(&path) else {
             return Vec::new();
         };
@@ -503,7 +514,7 @@ impl Instance {
 
         for entry in directory {
             let Ok(entry) = entry else {
-                eprintln!("Error reading file in content folder: {:?}", entry.unwrap_err());
+                log::error!("Error reading file in content folder: {:?}", entry.unwrap_err());
                 continue;
             };
 
@@ -525,6 +536,9 @@ impl Instance {
         mod_metadata_manager: Arc<ModMetadataManager>,
         last: Arc<[InstanceContentSummary]>,
     ) -> Vec<InstanceContentSummary> {
+        log::debug!("Loading changed content");
+        log::trace!("Changed content: {:?}", dirty);
+
         let mut summaries = Vec::with_capacity(last.len() + 8);
 
         let mut alternative_dirty = HashSet::new();
@@ -611,6 +625,8 @@ impl Instance {
 
     pub fn load_from_folder(path: impl AsRef<Path>) -> Result<Self, InstanceLoadError> {
         let path = path.as_ref();
+        log::info!("Loading instance from {:?}", path);
+
         if !path.is_dir() {
             return Err(InstanceLoadError::NotADirectory);
         }
@@ -623,8 +639,6 @@ impl Instance {
         dot_minecraft_path.push(".minecraft");
 
         let saves_path = dot_minecraft_path.join("saves");
-        let mods_path = dot_minecraft_path.join("mods");
-        let resourcepacks_path = dot_minecraft_path.join("resourcepacks");
         let server_dat_path = dot_minecraft_path.join("servers.dat");
 
         let content_state = enum_map::EnumMap::from_fn(|content_type: ContentFolder| {
@@ -742,6 +756,7 @@ fn create_instance_content_summary(path: &Path, mod_metadata_manager: &Arc<ModMe
     } else if filename.ends_with(".jar") || filename.ends_with(".mrpack") || filename.ends_with(".zip") {
         true
     } else {
+        log::trace!("Skipping content file {}, unknown extension", filename);
         return None;
     };
     let Ok(mut file) = std::fs::File::open(&path) else {

@@ -29,13 +29,19 @@ pub enum ProcessAuthorizationError {
 pub async fn start_server(
     pending_authroization: PendingAuthorization,
 ) -> Result<FinishedAuthorization, ProcessAuthorizationError> {
+    log::info!("Starting auth redirect server on {}", constants::SERVER_ADDRESS);
+
     let listener = tokio::net::TcpListener::bind(constants::SERVER_ADDRESS).await?;
+
+    log::info!("Successfully started listening on {}", constants::SERVER_ADDRESS);
 
     let mut buf = vec![0_u8; 1024];
     let mut read;
 
     loop {
+        log::info!("Waiting for a new connection");
         let (mut stream, _addr) = listener.accept().await?;
+        log::info!("Got a new connection");
 
         read = 0;
         loop {
@@ -43,11 +49,13 @@ pub async fn start_server(
             read += n;
 
             if read == buf.len() {
+                log::debug!("Resizing read buffer from {} to {}", buf.len(), buf.len()*2);
                 buf.resize(buf.len() * 2, 0);
                 continue;
             }
 
             if read == 0 {
+                log::warn!("Stream immediately closed with 0 read bytes, ignoring");
                 break; // Accept a new connection
             }
 
@@ -57,11 +65,14 @@ pub async fn start_server(
 
             if parsed.is_partial() {
                 if n == 0 {
+                    log::warn!("Only got partial request before EOF, ignoring");
                     break; // Accept a new connection
                 } else {
                     continue;
                 }
             }
+
+            log::info!("Successfully received and parsed http request");
 
             const BAD_REQUEST_RESPONSE: &[u8] = b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n";
             const NOT_FOUND_RESPONSE: &[u8] = b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n";
@@ -94,7 +105,7 @@ pub async fn start_server(
                     "code" => code = Some(value),
                     "state" => state = Some(value),
                     _ => {
-                        eprintln!("Unknown parameter: {:?} => {:?}", key, value);
+                        log::warn!("Unknown parameter: {:?} => {:?}", key, value);
                     },
                 }
             }

@@ -13,6 +13,7 @@ pub fn create_wrapper(temp_dir: &Path) -> PathBuf {
     let launch_wrapper = temp_dir.join(format!("LaunchWrapper-{}.jar", hash));
 
     if !launch_wrapper.exists() {
+        log::info!("Writing launch wrapper jar to {:?}", launch_wrapper);
         _ = crate::write_safe(&launch_wrapper, LAUNCH_WRAPPER);
     }
 

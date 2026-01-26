@@ -146,7 +146,7 @@ impl PngRenderCache {
         let render_image = match result {
             Ok(render_image) => Some(Arc::new(render_image)),
             Err(error) => {
-                eprintln!("Error loading png: {error:?}");
+                log::warn!("Error loading png: {error:?}");
                 None
             },
         };

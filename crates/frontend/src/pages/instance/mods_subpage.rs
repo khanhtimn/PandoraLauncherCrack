@@ -7,7 +7,7 @@ use bridge::{
 };
 use gpui::{prelude::*, *};
 use gpui_component::{
-    breadcrumb::{Breadcrumb, BreadcrumbItem}, button::{Button, ButtonVariants}, h_flex, list::{ListDelegate, ListItem, ListState}, notification::{Notification, NotificationType}, switch::Switch, v_flex, ActiveTheme as _, Icon, IconName, IndexPath, Sizable, WindowExt
+    ActiveTheme as _, Icon, IconName, IndexPath, Sizable, WindowExt, breadcrumb::{Breadcrumb, BreadcrumbItem}, button::{Button, ButtonVariants}, h_flex, input::SelectAll, list::{ListDelegate, ListItem, ListState}, notification::{Notification, NotificationType}, switch::Switch, v_flex
 };
 use parking_lot::Mutex;
 use rustc_hash::FxHashSet;
@@ -157,7 +157,6 @@ impl Render for InstanceModsSubpage {
                 })
             }));
 
-        let mod_list = self.mod_list.clone();
         v_flex().p_4().size_full().child(header).child(
             div()
                 .id("mod-list-area")
@@ -166,10 +165,24 @@ impl Render for InstanceModsSubpage {
                 .rounded(theme.radius)
                 .border_color(theme.border)
                 .child(self.mod_list.clone())
-                .on_click(move |_, _, cx| {
-                    cx.update_entity(&mod_list, |list, _| {
-                        list.delegate_mut().clear_selection();
-                    })
+                .on_click({
+                    let mod_list = self.mod_list.clone();
+                    move |_, _, cx| {
+                        cx.update_entity(&mod_list, |list, cx| {
+                            list.delegate_mut().clear_selection();
+                            cx.notify();
+                        })
+                    }
+                })
+                .key_context("Input")
+                .on_action({
+                    let mod_list = self.mod_list.clone();
+                    move |_: &SelectAll, _, cx| {
+                        cx.update_entity(&mod_list, |list, cx| {
+                            list.delegate_mut().select_all();
+                            cx.notify();
+                        })
+                    }
                 }),
         )
     }

@@ -11,9 +11,8 @@ use gpui_component::{
 };
 use parking_lot::Mutex;
 use rustc_hash::FxHashSet;
-use ustr::Ustr;
 
-use crate::{interface_config::InterfaceConfig, png_render_cache, root};
+use crate::{interface_config::InterfaceConfig, png_render_cache};
 
 #[derive(Clone)]
 struct ContentEntryChild {
@@ -509,6 +508,22 @@ impl ContentListDelegate {
         self.selected_range.clear();
         self.last_clicked_non_range = None;
         self.confirming_delete.lock().clear();
+    }
+
+    pub fn select_all(&mut self) {
+        self.clear_selection();
+
+        if let Some(searched) = &self.searched {
+            for element in searched {
+                if let SummaryOrChild::Summary(summary) = element {
+                    self.selected.insert(summary.filename_hash);
+                }
+            }
+        } else {
+            for summary in &self.content {
+                self.selected.insert(summary.filename_hash);
+            }
+        }
     }
 }
 

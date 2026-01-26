@@ -150,19 +150,26 @@ impl Render for Settings {
         if let Some(backend_config) = &self.backend_config {
             div = div
                 .child(crate::labelled(
-                    "Game Output",
-                    Checkbox::new("open-game-output")
-                        .label("Open game output when launching")
-                        .checked(backend_config.open_game_output_when_launching)
-                        .on_click(cx.listener({
-                            let backend_handle = self.backend_handle.clone();
-                            move |settings, value, _, cx| {
-                                backend_handle.send(MessageToBackend::SetOpenGameOutputAfterLaunching {
-                                    value: *value
-                                });
-                                settings.update_backend_configuration(cx);
-                            }
-                        }))
+                    "Launching",
+                    v_flex().gap_2()
+                        .child(Checkbox::new("hide-on-launch")
+                            .label("Hide main window on launch")
+                            .checked(interface_config.hide_main_window_on_launch)
+                            .on_click(|value, _, cx| {
+                                InterfaceConfig::get_mut(cx).hide_main_window_on_launch = *value;
+                            }))
+                        .child(Checkbox::new("open-game-output")
+                            .label("Open game output on launch")
+                            .checked(backend_config.open_game_output_when_launching)
+                            .on_click(cx.listener({
+                                let backend_handle = self.backend_handle.clone();
+                                move |settings, value, _, cx| {
+                                    backend_handle.send(MessageToBackend::SetOpenGameOutputAfterLaunching {
+                                        value: *value
+                                    });
+                                    settings.update_backend_configuration(cx);
+                                }
+                            })))
                 ))
         } else {
             div = div.child(Spinner::new().large());

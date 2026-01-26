@@ -1,4 +1,4 @@
-use std::{ffi::OsString, path::Path, sync::Arc};
+use std::{ffi::OsString, path::{Path, PathBuf}, sync::Arc};
 
 use enumset::{EnumSet, EnumSetType};
 use schema::{backend_config::{BackendConfig, SyncTarget}, instance::{InstanceConfiguration, InstanceJvmBinaryConfiguration, InstanceJvmFlagsConfiguration, InstanceMemoryConfiguration}, loader::Loader};
@@ -143,6 +143,10 @@ pub enum MessageToBackend {
     },
     SetOpenGameOutputAfterLaunching {
         value: bool,
+    },
+    CreateInstanceShortcut {
+        id: InstanceID,
+        path: PathBuf
     },
 }
 

@@ -1,4 +1,4 @@
-use std::{path::Path, sync::{Arc, RwLock}};
+use std::{path::Path, sync::Arc};
 
 use bridge::{
     handle::BackendHandle,
@@ -9,6 +9,7 @@ use bridge::{
 };
 use gpui::{prelude::*, *};
 use gpui_component::{breadcrumb::Breadcrumb, scroll::{ScrollableElement, ScrollbarAxis}, v_flex, Root, StyledExt};
+use parking_lot::RwLock;
 
 use crate::{entity::DataEntities, modals, ui::{LauncherUI, PageType}, CloseWindow, MAIN_FONT};
 
@@ -29,8 +30,6 @@ pub struct LauncherRoot {
 impl LauncherRoot {
     pub fn new(
         data: &DataEntities,
-        panic_message: Arc<RwLock<Option<String>>>,
-        deadlock_message: Arc<RwLock<Option<String>>>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -41,8 +40,8 @@ impl LauncherRoot {
 
         Self {
             ui: launcher_ui,
-            panic_message,
-            deadlock_message,
+            panic_message: data.panic_messages.panic_message.clone(),
+            deadlock_message: data.panic_messages.deadlock_message.clone(),
             backend_handle: data.backend_handle.clone(),
             focus_handle,
         }
@@ -51,7 +50,7 @@ impl LauncherRoot {
 
 impl Render for LauncherRoot {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        if let Some(message) = &*self.deadlock_message.read().unwrap() {
+        if let Some(message) = &*self.deadlock_message.read() {
             let purple = Hsla {
                 h: 0.8333333333,
                 s: 1.,
@@ -60,7 +59,7 @@ impl Render for LauncherRoot {
             };
             return v_flex().size_full().bg(purple).child(message.clone()).overflow_y_scrollbar().into_any_element();
         }
-        if let Some(message) = &*self.panic_message.read().unwrap() {
+        if let Some(message) = &*self.panic_message.read() {
             return v_flex().size_full().bg(gpui::blue()).child(message.clone()).overflow_y_scrollbar().into_any_element();
         }
         if self.backend_handle.is_closed() {

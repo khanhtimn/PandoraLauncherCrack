@@ -626,9 +626,37 @@ impl Render for InstanceSettingsSubpage {
                 })))
             );
 
-        let danger_content = v_flex()
+        let actions_content = v_flex()
             .gap_4()
             .size_full()
+            .child(Button::new("shortcut").label("Create shortcut").success().on_click({
+                let instance = self.instance.clone();
+                let backend_handle = self.backend_handle.clone();
+                move |_: &ClickEvent, _, cx| {
+                    let user_dirs = directories::UserDirs::new();
+                    let directory = user_dirs.as_ref()
+                        .and_then(directories::UserDirs::desktop_dir).unwrap_or(Path::new("."));
+                    let instance = instance.read(cx);
+                    let id = instance.id;
+                    let name = instance.name.clone();
+
+                    #[cfg(target_os = "linux")]
+                    let suggested_name = format!("{name}.desktop");
+                    #[cfg(target_os = "windows")]
+                    let suggested_name = format!("{name}.lnk");
+                    #[cfg(target_os = "macos")]
+                    let suggested_name = format!("{name}.app");
+
+                    let receiver = cx.prompt_for_new_path(directory, Some(&suggested_name));
+                    let backend_handle = backend_handle.clone();
+                    cx.spawn(async move |_| {
+                        let Ok(Ok(Some(path))) = receiver.await else {
+                            return;
+                        };
+                        backend_handle.send(MessageToBackend::CreateInstanceShortcut { id, path });
+                    }).detach();
+                }
+            }))
             .child(Button::new("delete").label("Delete this instance").danger().on_click({
                 let instance = self.instance.clone();
                 let backend_handle = self.backend_handle.clone();
@@ -657,7 +685,7 @@ impl Render for InstanceSettingsSubpage {
             .child(div().bg(cx.theme().border).h_full().w_0p5())
             .child(runtime_content)
             .child(div().bg(cx.theme().border).h_full().w_0p5())
-            .child(danger_content);
+            .child(actions_content);
 
         v_flex()
             .p_4()

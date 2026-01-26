@@ -1,5 +1,5 @@
 use std::{
-    borrow::Cow, path::{Path, PathBuf}, sync::Arc
+    borrow::Cow, fmt::Debug, path::{Path, PathBuf}, sync::Arc
 };
 
 use reqwest::RequestBuilder;
@@ -11,7 +11,7 @@ use ustr::Ustr;
 
 use crate::metadata::manager::{MetaLoadError, MetaLoadStateWrapper, MetadataManager, MetadataManagerStates};
 
-pub trait MetadataItem {
+pub trait MetadataItem: Debug {
     type T: Send + Sync + 'static;
 
     fn request(&self, client: &reqwest::Client) -> RequestBuilder;
@@ -29,6 +29,7 @@ pub trait MetadataItem {
     }
 }
 
+#[derive(Debug)]
 pub struct MinecraftVersionManifestMetadataItem;
 
 impl MetadataItem for MinecraftVersionManifestMetadataItem {
@@ -55,6 +56,7 @@ impl MetadataItem for MinecraftVersionManifestMetadataItem {
     }
 }
 
+#[derive(Debug)]
 pub struct MojangJavaRuntimesMetadataItem;
 
 impl MetadataItem for MojangJavaRuntimesMetadataItem {
@@ -81,6 +83,7 @@ impl MetadataItem for MojangJavaRuntimesMetadataItem {
     }
 }
 
+#[derive(Debug)]
 pub struct MinecraftVersionMetadataItem<'v>(pub &'v MinecraftVersionLink);
 
 impl<'v> MetadataItem for MinecraftVersionMetadataItem<'v> {
@@ -116,6 +119,7 @@ impl<'v> MetadataItem for MinecraftVersionMetadataItem<'v> {
     }
 }
 
+#[derive(Debug)]
 pub struct AssetsIndexMetadataItem {
     pub url: Ustr,
     pub cache: Arc<Path>,
@@ -150,6 +154,7 @@ impl MetadataItem for AssetsIndexMetadataItem {
     }
 }
 
+#[derive(Debug)]
 pub struct MojangJavaRuntimeComponentMetadataItem {
     pub url: Ustr,
     pub cache: Arc<Path>,
@@ -184,6 +189,7 @@ impl MetadataItem for MojangJavaRuntimeComponentMetadataItem {
     }
 }
 
+#[derive(Debug)]
 pub struct FabricLoaderManifestMetadataItem;
 
 impl MetadataItem for FabricLoaderManifestMetadataItem {
@@ -210,6 +216,7 @@ impl MetadataItem for FabricLoaderManifestMetadataItem {
     }
 }
 
+#[derive(Debug)]
 pub struct FabricLaunchMetadataItem {
     pub minecraft_version: Ustr,
     pub loader_version: Ustr,
@@ -243,6 +250,7 @@ impl MetadataItem for FabricLaunchMetadataItem {
     }
 }
 
+#[derive(Debug)]
 pub struct ModrinthSearchMetadataItem<'a>(pub &'a ModrinthSearchRequest);
 
 impl<'a> MetadataItem for ModrinthSearchMetadataItem<'a> {
@@ -265,6 +273,7 @@ impl<'a> MetadataItem for ModrinthSearchMetadataItem<'a> {
     }
 }
 
+#[derive(Debug)]
 pub struct ModrinthProjectVersionsMetadataItem<'a>(pub &'a ModrinthProjectVersionsRequest);
 
 impl<'a> MetadataItem for ModrinthProjectVersionsMetadataItem<'a> {
@@ -295,6 +304,7 @@ impl<'a> MetadataItem for ModrinthProjectVersionsMetadataItem<'a> {
     }
 }
 
+#[derive(Debug)]
 pub struct ModrinthVersionMetadataItem(pub Arc<str>);
 
 impl MetadataItem for ModrinthVersionMetadataItem {
@@ -324,6 +334,7 @@ pub struct VersionUpdateParameters {
     pub game_versions: Arc<[Ustr]>,
 }
 
+#[derive(Debug)]
 pub struct ModrinthVersionUpdateMetadataItem {
     pub sha1: Arc<str>,
     pub params: VersionUpdateParameters,
@@ -362,6 +373,7 @@ pub struct VersionV3LoaderFields {
     pub game_versions: Arc<[Ustr]>,
 }
 
+#[derive(Debug)]
 pub struct ModrinthV3VersionUpdateMetadataItem {
     pub sha1: Arc<str>,
     pub params: VersionV3UpdateParameters,
@@ -388,6 +400,7 @@ impl MetadataItem for ModrinthV3VersionUpdateMetadataItem {
     }
 }
 
+#[derive(Debug)]
 pub struct NeoforgeInstallerMavenMetadataItem;
 
 impl MetadataItem for NeoforgeInstallerMavenMetadataItem {
@@ -422,6 +435,7 @@ impl MetadataItem for NeoforgeInstallerMavenMetadataItem {
     }
 }
 
+#[derive(Debug)]
 pub struct ForgeInstallerMavenMetadataItem;
 
 impl MetadataItem for ForgeInstallerMavenMetadataItem {

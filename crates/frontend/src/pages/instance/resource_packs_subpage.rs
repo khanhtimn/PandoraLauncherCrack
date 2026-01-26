@@ -7,7 +7,7 @@ use bridge::{
 };
 use gpui::{prelude::*, *};
 use gpui_component::{
-    breadcrumb::{Breadcrumb, BreadcrumbItem}, button::{Button, ButtonVariants}, h_flex, list::{ListDelegate, ListItem, ListState}, notification::{Notification, NotificationType}, switch::Switch, v_flex, ActiveTheme as _, Icon, IconName, IndexPath, Sizable, WindowExt
+    ActiveTheme as _, Icon, IconName, IndexPath, Sizable, WindowExt, breadcrumb::{Breadcrumb, BreadcrumbItem}, button::{Button, ButtonVariants}, h_flex, input::SelectAll, list::{ListDelegate, ListItem, ListState}, notification::{Notification, NotificationType}, switch::Switch, v_flex
 };
 use parking_lot::Mutex;
 use rustc_hash::FxHashSet;
@@ -157,7 +157,6 @@ impl Render for InstanceResourcePacksSubpage {
                 })
             }));
 
-        let resource_pack_list = self.resource_pack_list.clone();
         v_flex().p_4().size_full().child(header).child(
             div()
                 .id("pack-list-area")
@@ -166,10 +165,23 @@ impl Render for InstanceResourcePacksSubpage {
                 .rounded(theme.radius)
                 .border_color(theme.border)
                 .child(self.resource_pack_list.clone())
-                .on_click(move |_, _, cx| {
-                    cx.update_entity(&resource_pack_list, |list, _| {
-                        list.delegate_mut().clear_selection();
-                    })
+                .on_click({
+                    let resource_pack_list = self.resource_pack_list.clone();
+                    move |_, _, cx| {
+                        cx.update_entity(&resource_pack_list, |list, _| {
+                            list.delegate_mut().clear_selection();
+                        })
+                    }
+                })
+                .key_context("Input")
+                .on_action({
+                    let resource_pack_list = self.resource_pack_list.clone();
+                    move |_: &SelectAll, _, cx| {
+                        cx.update_entity(&resource_pack_list, |list, cx| {
+                            list.delegate_mut().select_all();
+                            cx.notify();
+                        })
+                    }
                 }),
         )
     }

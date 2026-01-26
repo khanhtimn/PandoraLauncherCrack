@@ -1,7 +1,7 @@
 #![deny(unused_must_use)]
 
 use std::{
-    path::{Path, PathBuf}, sync::{Arc, RwLock}
+    path::{Path, PathBuf}, sync::{Arc, atomic::AtomicBool}
 };
 
 use bridge::
@@ -12,10 +12,11 @@ use gpui_component::{
     notification::{Notification, NotificationType}, Root, StyledExt, WindowExt
 };
 use indexmap::IndexMap;
+use parking_lot::RwLock;
 
 use crate::{
     entity::{
-        account::AccountEntries, instance::InstanceEntries, metadata::FrontendMetadata, DataEntities
+        DataEntities, PanicMessages, account::AccountEntries, instance::InstanceEntries, metadata::FrontendMetadata
     }, interface_config::InterfaceConfig, processor::Processor, root::{LauncherRoot, LauncherRootGlobal}
 };
 
@@ -74,7 +75,7 @@ pub fn start(
     panic_message: Arc<RwLock<Option<String>>>,
     deadlock_message: Arc<RwLock<Option<String>>>,
     backend_handle: BackendHandle,
-    mut recv: FrontendReceiver,
+    recv: FrontendReceiver,
 ) {
     let http_client = std::sync::Arc::new(
         reqwest_client::ReqwestClient::user_agent(
@@ -118,9 +119,14 @@ pub fn start(
             async {}
         }).detach();
 
-        cx.on_window_closed(|cx| {
-            if cx.windows().is_empty() {
-                cx.quit();
+        let main_window_hidden = Arc::new(AtomicBool::new(false));
+
+        cx.on_window_closed({
+            let main_window_hidden = main_window_hidden.clone();
+            move |cx| {
+                if cx.windows().is_empty() && !main_window_hidden.load(std::sync::atomic::Ordering::SeqCst) {
+                    cx.quit();
+                }
             }
         }).detach();
 
@@ -133,32 +139,42 @@ pub fn start(
             cx.quit();
         });
 
-        cx.open_window(
-            WindowOptions {
-                app_id: Some("PandoraLauncher".into()),
-                window_min_size: Some(size(px(360.0), px(240.0))),
-                titlebar: Some(TitlebarOptions {
-                    title: Some(SharedString::new_static("Pandora")),
-                    ..Default::default()
-                }),
-                window_decorations: Some(WindowDecorations::Server),
-                ..Default::default()
-            },
-            |window, cx| {
-                let instances = cx.new(|_| InstanceEntries {
-                    entries: IndexMap::new(),
-                });
-                let metadata = cx.new(|_| FrontendMetadata::new(backend_handle.clone()));
-                let accounts = cx.new(|_| AccountEntries::default());
-                let data = DataEntities {
-                    instances,
-                    metadata,
-                    backend_handle,
-                    accounts,
-                    theme_folder: theme_folder.into(),
-                };
+        let instances = cx.new(|_| InstanceEntries {
+            entries: IndexMap::new(),
+        });
+        let metadata = cx.new(|_| FrontendMetadata::new(backend_handle.clone()));
+        let accounts = cx.new(|_| AccountEntries::default());
+        let data = DataEntities {
+            instances,
+            metadata,
+            backend_handle,
+            accounts,
+            theme_folder: theme_folder.into(),
+            panic_messages: Arc::new(PanicMessages {
+                panic_message,
+                deadlock_message,
+            })
+        };
 
-                let mut processor = Processor::new(data.clone(), window.window_handle());
+        open_main_window(&data, Some((recv, main_window_hidden)), cx);
+    });
+}
+
+pub fn open_main_window(data: &DataEntities, start_processor: Option<(FrontendReceiver, Arc<AtomicBool>)>, cx: &mut App) -> AnyWindowHandle {
+    let handle = cx.open_window(
+        WindowOptions {
+            app_id: Some("PandoraLauncher".into()),
+            window_min_size: Some(size(px(360.0), px(240.0))),
+            titlebar: Some(TitlebarOptions {
+                title: Some(SharedString::new_static("Pandora")),
+                ..Default::default()
+            }),
+            window_decorations: Some(WindowDecorations::Server),
+            ..Default::default()
+        },
+        |window, cx| {
+            if let Some((mut recv, main_window_hidden)) = start_processor {
+                let mut processor = Processor::new(data.clone(), window.window_handle(), main_window_hidden);
 
                 while let Some(message) = recv.try_recv() {
                     processor.process(message, cx);
@@ -171,19 +187,21 @@ pub fn start(
                         });
                     }
                 }).detach();
+            }
 
-                window.set_window_title("Pandora");
+            window.set_window_title("Pandora");
 
-                let launcher_root = cx.new(|cx| LauncherRoot::new(&data, panic_message, deadlock_message, window, cx));
-                cx.set_global(LauncherRootGlobal {
-                    root: launcher_root.clone(),
-                });
-                cx.new(|cx| Root::new(launcher_root, window, cx))
-            },
-        ).unwrap();
+            let launcher_root = cx.new(|cx| LauncherRoot::new(&data, window, cx));
+            cx.set_global(LauncherRootGlobal {
+                root: launcher_root.clone(),
+            });
+            cx.new(|cx| Root::new(launcher_root, window, cx))
+        },
+    ).unwrap();
 
-        cx.activate(true);
-    });
+    cx.activate(true);
+
+    handle.into()
 }
 
 pub(crate) fn is_valid_instance_name(name: &str) -> bool {

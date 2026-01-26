@@ -256,6 +256,8 @@ impl MetadataManager {
         cache_file: Option<impl AsRef<Path> + Send + Sync + 'static>,
         http_client: &reqwest::Client,
     ) {
+        log::debug!("Loading metadata {:?}", item);
+
         let request = item.request(http_client);
         let expected_hash = item.data_hash().and_then(|sha1| {
             let mut expected_hash = [0u8; 20];
@@ -283,7 +285,7 @@ impl MetadataManager {
                     };
 
                     if !correct_hash {
-                        eprintln!("Sha1 mismatch for {:?}, downloading file again...", cache_file);
+                        log::info!("Sha1 mismatch for {:?}, downloading file again...", cache_file);
                         return None;
                     }
 
@@ -293,7 +295,7 @@ impl MetadataManager {
                             Some(meta)
                         },
                         Err(error) => {
-                            eprintln!("Error parsing cached metadata file for {:?}, downloading file again... {}", cache_file, error);
+                            log::warn!("Error parsing cached metadata file for {:?}, downloading file again... {}", cache_file, error);
                             None
                         },
                     }
@@ -308,7 +310,7 @@ impl MetadataManager {
             }
 
             let mut result: Result<Arc<I::T>, MetaLoadError> = async move {
-                let response = request.timeout(std::time::Duration::from_secs(5)).send().await?;
+                let response = request.send().await?;
 
                 let status = response.status();
                 if status != StatusCode::OK {
@@ -366,13 +368,13 @@ impl MetadataManager {
 
             if let Err(error) = &result {
                 if let Some(file_fallback) = file_fallback {
-                    eprintln!(
+                    log::warn!(
                         "Error while fetching metadata {:?}, using file fallback: {error:?}",
                         std::any::type_name::<I::T>()
                     );
                     result = Ok(file_fallback);
                 } else {
-                    eprintln!("Error while fetching metadata {:?}: {error:?}", std::any::type_name::<I::T>());
+                    log::error!("Error while fetching metadata {:?}: {error:?}", std::any::type_name::<I::T>());
                 }
             }
 

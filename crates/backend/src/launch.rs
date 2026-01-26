@@ -1,5 +1,5 @@
 use std::{
-    borrow::Cow, cmp::Ordering, collections::{BTreeSet, HashMap, HashSet}, ffi::{OsStr, OsString}, io::{BufRead, BufReader, Read, Write}, path::{Path, PathBuf}, process::{Child, Stdio}, sync::{Arc, OnceLock, atomic::AtomicBool}
+    borrow::Cow, cmp::Ordering, collections::{BTreeSet, HashMap, HashSet}, ffi::{OsStr, OsString}, fs::File, io::{BufRead, BufReader, Read, Write}, path::{Path, PathBuf}, process::{Child, Stdio}, sync::{Arc, OnceLock, atomic::AtomicBool}
 };
 
 use bridge::{
@@ -7,11 +7,11 @@ use bridge::{
 };
 use futures::{FutureExt, TryFutureExt};
 use rand::seq::SliceRandom;
-use rc_zip_sync::ReadZip;
+use rc_zip_sync::{ArchiveHandle, ReadZip};
 use regex::Regex;
 use rustc_hash::FxHashMap;
 use schema::{
-    assets_index::AssetsIndex, fabric_launch::FabricLaunch, forge::{ForgeInstallProfile, ForgeSide, VersionFragment}, instance::InstanceConfiguration, java_runtime_component::{JavaRuntimeComponentFile, JavaRuntimeComponentManifest}, loader::Loader, maven::MavenMetadataXml, version::{
+    assets_index::AssetsIndex, fabric_launch::FabricLaunch, forge::{ForgeInstallProfile, ForgeInstallProfileLegacy, ForgeSide, VersionFragment}, instance::InstanceConfiguration, java_runtime_component::{JavaRuntimeComponentFile, JavaRuntimeComponentManifest}, loader::Loader, maven::{MavenCoordinate, MavenMetadataXml}, version::{
         GameLibrary, GameLibraryArtifact, GameLibraryDownloads, GameLibraryExtractOptions, GameLogging, LaunchArgument, LaunchArgumentValue, MinecraftVersion, OsArch, OsName, PartialMinecraftVersion, Rule, RuleAction
     }, version_manifest::MinecraftVersionManifest
 };
@@ -91,7 +91,11 @@ impl Launcher {
         launch_tracker: &ProgressTracker,
         modal_action: &ModalAction,
     ) -> Result<Child, LaunchError> {
+        log::info!("Launching {:?}", dot_minecraft_path);
+
         launch_tracker.set_total(6);
+
+        log::debug!("Creating launch version");
 
         let (version_info, add_vanilla_jar) = tokio::select! {
             result = self.create_launch_version(http_client, &modal_action.trackers, launch_tracker, &instance_info) => result?,
@@ -143,6 +147,8 @@ impl Launcher {
         let load_libraries_future =
             self.load_libraries(http_client, &artifacts, &modal_action.trackers, launch_tracker);
         let load_log_configuration = self.load_log_configuration(http_client, version_info.logging.as_ref());
+
+        log::debug!("Loading java, assets, libraries and log configuration");
 
         let joined = futures::future::try_join4(
             mojang_java_binary_future.map_err(LaunchError::from),
@@ -230,6 +236,7 @@ impl Launcher {
             return Err(LaunchError::CancelledByUser);
         }
 
+        log::info!("Launching game process");
         let child = launch_context.launch(&version_info)?;
 
         launch_tracker.add_count(1);
@@ -545,8 +552,38 @@ impl Launcher {
             return Err(LaunchError::MissingFileInZipError(Cow::Borrowed("install_profile.json")));
         };
 
-        let install_profile: ForgeInstallProfile = serde_json::from_slice(&install_profile_file.bytes()?)?;
+        let install_profile_bytes = install_profile_file.bytes()?;
 
+        let install_profile = serde_json::from_slice(&install_profile_bytes);
+
+        if install_profile.is_err() {
+            if let Ok(install_profile_legacy) = serde_json::from_slice(&install_profile_bytes) {
+                launch_tracker.add_count(1);
+                let ret = self.create_forgelike_install_version_legacy(install_profile_legacy, installer_zip,
+                    base_version, http_client, progress_trackers, launch_tracker, instance_info, check_mirrors).await;
+                return ret;
+            }
+        }
+
+        self.create_forgelike_install_version_modern(install_profile?, installer_zip,
+            installer_path, minecraft_jar_path, &java_load_result, base_version, http_client,
+            progress_trackers, launch_tracker, instance_info, check_mirrors).await
+    }
+
+    async fn create_forgelike_install_version_modern(
+        &self,
+        install_profile: ForgeInstallProfile,
+        installer_zip: ArchiveHandle<'_, File>,
+        installer_path: &PathBuf,
+        minecraft_jar_path: &PathBuf,
+        java_path: &PathBuf,
+        base_version: Arc<MinecraftVersion>,
+        http_client: &reqwest::Client,
+        progress_trackers: &ProgressTrackers,
+        launch_tracker: &ProgressTracker,
+        instance_info: &InstanceConfiguration,
+        check_mirrors: bool,
+    ) -> Result<(Arc<MinecraftVersion>, AddVanillaJar), LaunchError> {
         if &*install_profile.minecraft != instance_info.minecraft_version.as_str() {
             return Err(LaunchError::MismatchedLoaderVersions(install_profile.minecraft.clone()));
         }
@@ -571,6 +608,7 @@ impl Launcher {
         launch_tracker.add_count(1);
         launch_tracker.notify();
 
+        // Download libraries
         let libraries = install_profile.libraries.iter().filter_map(|library| {
             let mut artifact = library.downloads.artifact.clone()?;
             if let Some(mirror) = &mirror {
@@ -600,7 +638,7 @@ impl Launcher {
                     let target = target.to_path(&self.directories.libraries_dir);
                     data.insert(key, target.into_os_string());
                 } else {
-                    eprintln!("Artifact generated invalid path: {}", artifact_path);
+                    log::error!("Artifact generated invalid path: {}", artifact_path);
                 }
             } else if value.starts_with('\'') && value.ends_with('\'') {
                 data.insert(key, OsString::from(&value[1..value.len()-1]));
@@ -617,13 +655,12 @@ impl Launcher {
                     crate::write_safe(&target, &file.bytes()?)?;
                     data.insert(key, target.into_os_string());
                 } else {
-                    eprintln!("Unable to extract {}", file_name);
+                    log::error!("Unable to extract {}", file_name);
                 }
             }
         }
 
         drop(installer_zip);
-        drop(installer_file);
 
         data.insert("SIDE".into(), "client".into());
         data.insert("MINECRAFT_JAR".into(), minecraft_jar_path.as_os_str().to_os_string());
@@ -661,7 +698,7 @@ impl Launcher {
             let relative_jar_path = jar.artifact_path();
 
             let Some(safe_jar_path) = SafePath::new(&relative_jar_path) else {
-                eprintln!("Unable to run processor, invalid path: {}", relative_jar_path);
+                log::error!("Unable to run processor, invalid path: {}", relative_jar_path);
                 processor_tracker.add_count(1);
                 processor_tracker.notify();
                 continue;
@@ -681,7 +718,7 @@ impl Launcher {
             drop(jar_file);
 
             let Ok(manifest_str) = str::from_utf8(&manifest_bytes) else {
-                eprintln!("Unable to run processor, MANIFEST.MF is not utf8 encoded");
+                log::error!("Unable to run processor, MANIFEST.MF is not utf8 encoded");
                 processor_tracker.add_count(1);
                 processor_tracker.notify();
                 continue;
@@ -690,13 +727,13 @@ impl Launcher {
             let manifest_map = crate::java_manifest::parse_java_manifest(manifest_str);
 
             let Some(main_class) = manifest_map.get("Main-Class") else {
-                eprintln!("Unable to run processor, can't find Main-Class in MANIFEST.MF");
+                log::error!("Unable to run processor, can't find Main-Class in MANIFEST.MF");
                 processor_tracker.add_count(1);
                 processor_tracker.notify();
                 continue;
             };
 
-            let mut command = std::process::Command::new(&*java_load_result);
+            let mut command = std::process::Command::new(java_path);
 
             command.current_dir(&forge_temp);
             command.stdin(Stdio::inherit());
@@ -719,7 +756,7 @@ impl Launcher {
                         let target = target.to_path(&self.directories.libraries_dir);
                         Cow::Owned(target.into_os_string())
                     } else {
-                        eprintln!("Artifact generated invalid path: {}", artifact_path);
+                        log::error!("Artifact generated invalid path: {}", artifact_path);
                         continue;
                     }
                 } else if &**arg == "{ROOT}/libraries/" {
@@ -747,6 +784,63 @@ impl Launcher {
         launch_tracker.notify();
 
         Ok((Arc::new(version.apply_to(&base_version)), AddVanillaJar::No))
+    }
+
+    async fn create_forgelike_install_version_legacy(
+        &self,
+        install_profile: ForgeInstallProfileLegacy,
+        installer_zip: ArchiveHandle<'_, File>,
+        base_version: Arc<MinecraftVersion>,
+        http_client: &reqwest::Client,
+        progress_trackers: &ProgressTrackers,
+        launch_tracker: &ProgressTracker,
+        instance_info: &InstanceConfiguration,
+        check_mirrors: bool,
+    ) -> Result<(Arc<MinecraftVersion>, AddVanillaJar), LaunchError> {
+        if &*install_profile.install.minecraft != instance_info.minecraft_version.as_str() {
+            return Err(LaunchError::MismatchedLoaderVersions(install_profile.install.minecraft.clone()));
+        }
+
+        // Extract forge jar
+        let Some(file) = installer_zip.by_name(&install_profile.install.file_path) else {
+            return Err(LaunchError::MissingFileInZipError(Cow::Owned(install_profile.install.file_path.to_string())));
+        };
+        let forge_path = MavenCoordinate::create(&install_profile.install.path).artifact_path();
+        if !path_is_normal(forge_path.as_str()) {
+            return Err(LoadLibrariesError::IllegalLibraryPath(forge_path.into()).into());
+        }
+        let forge_artifact_path = self.directories.libraries_dir.join(forge_path.as_str());
+        crate::write_safe(&forge_artifact_path, &file.bytes()?)?;
+
+        // Read partial minecraft version
+        let version: PartialMinecraftVersion = install_profile.version_info.into_partial_version(ForgeSide::Client);
+
+        // Download mirror list
+        let mirror = if check_mirrors {
+            Self::download_random_mirror(http_client, &install_profile.install.mirror_list).await
+        } else {
+            None
+        };
+
+        launch_tracker.add_count(1);
+        launch_tracker.notify();
+
+        // Download libraries with mirror
+        if let Some(libraries) = &version.libraries {
+            let libraries = libraries.iter().filter_map(|library| {
+                let mut artifact = library.downloads.artifact.clone()?;
+                if let Some(mirror) = &mirror {
+                    if artifact.url.starts_with("http") && !artifact.url.starts_with("https://libraries.minecraft.net/") && artifact.url.ends_with(artifact.path.as_str()) {
+                        artifact.url = format!("{}{}", mirror, artifact.path).into();
+                    }
+                }
+                Some(artifact)
+            }).collect::<Vec<_>>();
+
+            self.load_libraries(http_client, &libraries, progress_trackers, launch_tracker).await?;
+        }
+
+        Ok((Arc::new(version.apply_to(&base_version)), AddVanillaJar::Yes))
     }
 
     async fn download_sha1(http_client: &reqwest::Client, url: &str) -> Option<Ustr> {
@@ -829,7 +923,7 @@ impl Launcher {
             return Err(LoadJavaRuntimeError::UnableToFindExternalBinary(needed_version, found_versions.into_iter().collect()));
         }
 
-        let platform: Ustr = match (std::env::consts::OS, std::env::consts::ARCH) {
+        let mut platform: Ustr = match (std::env::consts::OS, std::env::consts::ARCH) {
             ("linux", "x86_64") => "linux".into(),
             ("linux", "x86") => "linux-i386".into(),
             ("macos", "x86_64") => "mac-os".into(),
@@ -847,6 +941,24 @@ impl Launcher {
             "jre-legacy".into()
         };
 
+        let runtimes = meta.fetch(&MojangJavaRuntimesMetadataItem).await?;
+
+        let mut runtime_platform = runtimes.platforms.get(&platform).ok_or(LoadJavaRuntimeError::UnknownPlatform)?;
+        let mut runtime_components = runtime_platform.components.get(&jre_component);
+
+        // Fall back to x86 runtime on mac-os, since Rosetta exists
+        let missing_runtime_component = runtime_components.map(Vec::is_empty).unwrap_or(true);
+        if missing_runtime_component && platform == "mac-os-arm64" {
+            platform = "mac-os".into();
+            runtime_platform = runtimes.platforms.get(&platform).ok_or(LoadJavaRuntimeError::UnknownPlatform)?;
+            runtime_components = runtime_platform.components.get(&jre_component);
+        }
+
+        let Some(runtime_components) = runtime_components else {
+            return Err(LoadJavaRuntimeError::UnknownComponentForPlatform);
+        };
+        let runtime_component = runtime_components.first().ok_or(LoadJavaRuntimeError::UnknownComponentForPlatform)?;
+
         if !crate::is_single_component_path(jre_component.as_str()) {
             return Err(LoadJavaRuntimeError::InvalidComponentPath);
         }
@@ -861,15 +973,6 @@ impl Launcher {
         };
 
         let fresh_install = !runtime_component_dir.exists();
-
-        let runtimes = meta.fetch(&MojangJavaRuntimesMetadataItem).await?;
-
-        let runtime_platform = runtimes.platforms.get(&platform).ok_or(LoadJavaRuntimeError::UnknownPlatform)?;
-        let runtime_components = runtime_platform
-            .components
-            .get(&jre_component)
-            .ok_or(LoadJavaRuntimeError::UnknownComponentForPlatform)?;
-        let runtime_component = runtime_components.first().ok_or(LoadJavaRuntimeError::UnknownComponentForPlatform)?;
 
         let runtime = meta.fetch(&MojangJavaRuntimeComponentMetadataItem {
             url: runtime_component.manifest.url,
@@ -978,7 +1081,7 @@ impl Launcher {
         };
         let id = client.file.id.as_str();
         if !path_is_normal(id) {
-            eprintln!("Log configuration has path: {}", id);
+            log::error!("Log configuration has invalid path: {}", id);
             return None;
         }
         let path = self.directories.log_configs_dir.join(id);
@@ -987,7 +1090,7 @@ impl Launcher {
 
         let mut expected_hash = [0u8; 20];
         let Ok(_) = hex::decode_to_slice(client.file.sha1.as_str(), &mut expected_hash) else {
-            eprintln!("Log configuration has invalid sha1: {}", client.file.sha1.as_str());
+            log::error!("Log configuration has invalid sha1: {}", client.file.sha1.as_str());
             return None;
         };
 
@@ -1003,17 +1106,17 @@ impl Launcher {
         }
 
         let Ok(response) = http_client.get(client.file.url.as_str()).send().await else {
-            eprintln!("Failed to make request to download log configuration");
+            log::error!("Failed to make request to download log configuration");
             return None;
         };
         let Ok(bytes) = response.bytes().await else {
-            eprintln!("Failed to download log configuration");
+            log::error!("Failed to download log configuration");
             return None;
         };
         let bytes = Arc::new(bytes);
 
         if bytes.len() != client.file.size as usize {
-            eprintln!("Rejecting log configuration because invalid size");
+            log::error!("Rejecting log configuration because invalid size");
             return None;
         }
 
@@ -1030,12 +1133,12 @@ impl Launcher {
         };
 
         if !correct_hash {
-            eprintln!("Log configuration has incorrect hash");
+            log::error!("Log configuration has incorrect hash");
             return None;
         }
 
         let Ok(_) = tokio::fs::write(path.clone(), &*bytes).await else {
-            eprintln!("Failed to write log configuration to disk");
+            log::error!("Failed to write log configuration to disk");
             return None;
         };
 
@@ -1217,72 +1320,6 @@ impl Launcher {
             output = &output[2..];
         }
         output.parse().ok()
-    }
-}
-
-struct MavenCoordinate<'a> {
-    group_id: &'a str,
-    artifact_id: &'a str,
-    version: &'a str,
-    specifier: Option<&'a str>,
-    extension: Option<&'a str>,
-}
-
-impl<'a> MavenCoordinate<'a> {
-    fn create(maven: &'a str) -> Self {
-        let (main, extension) = if let Some((main, extension)) = maven.split_once('@') {
-            (main, Some(extension))
-        } else {
-            (maven, None)
-        };
-
-        let mut split = main.split(":");
-        let group_id = split.next().unwrap();
-        let artifact_id = split.next().unwrap();
-        let version = split.next().unwrap();
-        let specifier = split.next();
-
-        Self { group_id, artifact_id, version, specifier, extension }
-    }
-
-    fn version_id(&self) -> Vec<isize> {
-        let without_plus = self.version.split_once("+").map(|s| s.0).unwrap_or(self.version);
-
-        let mut version_numbers = Vec::new();
-        for part in without_plus.split(".") {
-            if let Ok(number) = part.parse() {
-                version_numbers.push(number);
-            } else {
-                version_numbers.push(0);
-            }
-        }
-        if version_numbers.is_empty() {
-            version_numbers.push(0);
-        }
-        version_numbers
-    }
-
-    fn artifact_path(&self) -> String {
-        let mut name = self.group_id.replace(".", "/");
-        name.push('/');
-        name.push_str(self.artifact_id);
-        name.push('/');
-        name.push_str(self.version);
-        name.push('/');
-        name.push_str(self.artifact_id);
-        name.push('-');
-        name.push_str(self.version);
-        if let Some(specifier) = self.specifier {
-            name.push('-');
-            name.push_str(specifier);
-        }
-        name.push('.');
-        if let Some(extension) = self.extension {
-            name.push_str(extension);
-        } else {
-            name.push_str("jar");
-        }
-        name
     }
 }
 
@@ -1491,6 +1528,9 @@ async fn do_java_runtime_load(
                         return Err(LoadJavaRuntimeError::WrongHash);
                     }
 
+                    if let Some(parent) = path.parent() {
+                        _ = std::fs::create_dir_all(parent);
+                    }
                     tokio::fs::write(&path, bytes).await?;
 
                     #[cfg(unix)]

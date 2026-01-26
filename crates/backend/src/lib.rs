@@ -25,6 +25,7 @@ mod metadata;
 mod mod_metadata;
 mod id_slab;
 mod persistent;
+mod shortcut;
 mod syncing;
 
 pub(crate) fn is_single_component_path(path: &str) -> bool {

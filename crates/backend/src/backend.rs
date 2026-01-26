@@ -12,6 +12,7 @@ use auth::{
 use bridge::{
     handle::{BackendHandle, BackendReceiver, FrontendHandle}, install::{ContentDownload, ContentInstall, ContentInstallFile, ContentInstallPath}, instance::{InstanceID, InstanceContentSummary, InstanceServerSummary, InstanceWorldSummary, ContentType}, message::MessageToFrontend, modal_action::{ModalAction, ModalActionVisitUrl, ProgressTracker, ProgressTrackerFinishType}, safe_path::SafePath
 };
+use indexmap::IndexSet;
 use parking_lot::RwLock;
 use reqwest::{StatusCode, redirect::Policy};
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -33,7 +34,8 @@ pub fn start(launcher_dir: PathBuf, send: FrontendHandle, self_handle: BackendHa
         .expect("Failed to initialize Tokio runtime");
 
     let http_client = reqwest::ClientBuilder::new()
-        // .connect_timeout(Duration::from_secs(5))
+        .connect_timeout(Duration::from_secs(15))
+        .read_timeout(Duration::from_secs(15))
         .redirect(Policy::none())
         .use_rustls_tls()
         .user_agent("PandoraLauncher/0.1.0 (https://github.com/Moulberry/PandoraLauncher)")
@@ -70,11 +72,13 @@ pub fn start(launcher_dir: PathBuf, send: FrontendHandle, self_handle: BackendHa
     let mut state_file_watching = BackendStateFileWatching {
         watcher,
         watching: HashMap::new(),
+        symlink_src_to_links: Default::default(),
+        symlink_link_to_src: Default::default(),
     };
 
     // Create initial directories
     let _ = std::fs::create_dir_all(&directories.instances_dir);
-    state_file_watching.try_watch_filesystem(&directories.root_launcher_dir, WatchTarget::RootDir);
+    state_file_watching.watch_filesystem(directories.root_launcher_dir.clone(), WatchTarget::RootDir);
 
     // Load accounts
     let account_info = Persistent::load(directories.accounts_json.clone());
@@ -98,6 +102,8 @@ pub fn start(launcher_dir: PathBuf, send: FrontendHandle, self_handle: BackendHa
         secret_storage: Arc::new(OnceCell::new()),
         head_cache: Default::default(),
     };
+
+    log::debug!("Doing initial backend load");
 
     runtime.block_on(async {
         state.send.send(state.account_info.write().get().create_update_message());
@@ -130,8 +136,10 @@ pub struct BackendStateInstances {
 }
 
 pub struct BackendStateFileWatching {
-    pub watcher: notify_debouncer_full::Debouncer<notify::RecommendedWatcher, notify_debouncer_full::RecommendedCache>,
-    pub watching: HashMap<Arc<Path>, WatchTarget>,
+    watcher: notify_debouncer_full::Debouncer<notify::RecommendedWatcher, notify_debouncer_full::RecommendedCache>,
+    watching: HashMap<Arc<Path>, WatchTarget>,
+    symlink_src_to_links: HashMap<Arc<Path>, IndexSet<Arc<Path>>>,
+    symlink_link_to_src: HashMap<Arc<Path>, Arc<Path>>,
 }
 
 #[derive(Clone)]
@@ -164,6 +172,8 @@ pub enum HeadCacheEntry {
 
 impl BackendState {
     async fn start(self, recv: BackendReceiver, watcher_rx: Receiver<notify_debouncer_full::DebounceEventResult>) {
+        log::info!("Starting backend");
+
         // Pre-fetch version manifest
         self.meta.load(&MinecraftVersionManifestMetadataItem).await;
 
@@ -171,12 +181,14 @@ impl BackendState {
     }
 
     pub async fn load_all_instances(&mut self) {
+        log::info!("Loading all instances");
+
         let mut paths_with_time = Vec::new();
 
-        self.file_watching.write().try_watch_filesystem(&self.directories.instances_dir, WatchTarget::InstancesDir);
+        self.file_watching.write().watch_filesystem(self.directories.instances_dir.clone(), WatchTarget::InstancesDir);
         for entry in std::fs::read_dir(&self.directories.instances_dir).unwrap() {
             let Ok(entry) = entry else {
-                eprintln!("Error reading directory in instances folder: {:?}", entry.unwrap_err());
+                log::warn!("Error reading directory in instances folder: {:?}", entry.unwrap_err());
                 continue;
             };
 
@@ -212,16 +224,14 @@ impl BackendState {
         for (path, _) in paths_with_time {
             let success = self.load_instance_from_path(&path, true, false);
             if !success {
-                self.watch_filesystem(&path, WatchTarget::InvalidInstanceDir);
+                self.file_watching.write().watch_filesystem(path.into(), WatchTarget::InvalidInstanceDir);
             }
         }
     }
 
-    pub fn watch_filesystem(&self, path: &Path, target: WatchTarget) {
-        self.file_watching.write().watch_filesystem(path, target, &self.send);
-    }
-
     pub fn remove_instance(&mut self, id: InstanceID) {
+        log::info!("Removing instance {id:?}");
+
         let mut instance_state = self.instance_state.write();
 
         if let Some(instance) = instance_state.instances.remove(id) {
@@ -248,7 +258,7 @@ impl BackendState {
                 if show_errors {
                     let error = instance.unwrap_err();
                     self.send.send_error(format!("Unable to load instance from {:?}:\n{}", &path, &error));
-                    eprintln!("Error loading instance: {:?}", &error);
+                    log::error!("Error loading instance: {:?}", &error);
                 }
 
                 return false;
@@ -300,7 +310,7 @@ impl BackendState {
             instance.id
         };
 
-        self.watch_filesystem(path, WatchTarget::InstanceDir { id: instance_id });
+        self.file_watching.write().watch_filesystem(path.into(), WatchTarget::InstanceDir { id: instance_id });
         true
     }
 
@@ -315,7 +325,7 @@ impl BackendState {
                     if let Some(message) = message {
                         self.handle_message(message).await;
                     } else {
-                        eprintln!("Backend receiver has shut down");
+                        log::info!("Backend receiver has shut down");
                         break;
                     }
                 },
@@ -323,7 +333,7 @@ impl BackendState {
                     if let Some(instance_change) = instance_change {
                         self.handle_filesystem(instance_change).await;
                     } else {
-                        eprintln!("Backend filesystem has shut down");
+                        log::info!("Backend filesystem has shut down");
                         break;
                     }
                 },
@@ -342,6 +352,7 @@ impl BackendState {
             if let Some(child) = &mut instance.child
                 && !matches!(child.try_wait(), Ok(None))
             {
+                log::debug!("Child process is no longer alive");
                 instance.child = None;
                 self.send.send(instance.create_modify_message());
             }
@@ -354,6 +365,8 @@ impl BackendState {
         login_tracker: &ProgressTracker,
         modal_action: &ModalAction,
     ) -> Result<(MinecraftProfileResponse, MinecraftAccessToken), LoginError> {
+        log::info!("Starting login");
+
         let mut authenticator = Authenticator::new(self.http_client.clone());
 
         login_tracker.set_total(AUTH_STAGE_COUNT as usize + 1);
@@ -376,13 +389,13 @@ impl BackendState {
                 if stage > last_stage {
                     allow_backwards = false;
                 } else if stage < last_stage && !allow_backwards {
-                    eprintln!(
+                    log::error!(
                         "Stage {:?} went backwards from {:?} when going backwards isn't allowed. This is most likely a bug with the auth flow!",
                         stage, last_stage
                     );
                     return Err(LoginError::LoginStageErrorBackwards);
                 } else if stage == last_stage {
-                    eprintln!("Stage {:?} didn't change. This is most likely a bug with the auth flow!", stage);
+                    log::error!("Stage {:?} didn't change. This is most likely a bug with the auth flow!", stage);
                     return Err(LoginError::LoginStageErrorDidntChange);
                 }
             }
@@ -390,6 +403,8 @@ impl BackendState {
 
             match credentials.stage() {
                 auth::credentials::AuthStageWithData::Initial => {
+                    log::debug!("Auth Flow: Initial");
+
                     let pending = authenticator.create_authorization();
                     modal_action.set_visit_url(ModalActionVisitUrl {
                         message: "Login with Microsoft".into(),
@@ -398,6 +413,7 @@ impl BackendState {
                     });
                     self.send.send(MessageToFrontend::Refresh);
 
+                    log::debug!("Starting serve_redirect server");
                     let finished = tokio::select! {
                         finished = serve_redirect::start_server(pending) => finished?,
                         _ = modal_action.request_cancel.cancelled() => {
@@ -405,15 +421,20 @@ impl BackendState {
                         }
                     };
 
+                    log::debug!("serve_redirect handled successfully");
+
                     modal_action.unset_visit_url();
                     self.send.send(MessageToFrontend::Refresh);
 
+                    log::debug!("Finishing authorization, getting msa tokens");
                     let msa_tokens = authenticator.finish_authorization(finished).await?;
 
                     credentials.msa_access = Some(msa_tokens.access);
                     credentials.msa_refresh = msa_tokens.refresh;
                 },
                 auth::credentials::AuthStageWithData::MsaRefresh(refresh) => {
+                    log::debug!("Auth Flow: MsaRefresh");
+
                     match authenticator.refresh_msa(&refresh).await {
                         Ok(Some(msa_tokens)) => {
                             credentials.msa_access = Some(msa_tokens.access);
@@ -430,13 +451,15 @@ impl BackendState {
                                 return Err(error.into());
                             }
                             if !matches!(error, MsaAuthorizationError::InvalidGrant) {
-                                eprintln!("Error using msa refresh to get msa access: {:?}", error);
+                                log::warn!("Error using msa refresh to get msa access: {:?}", error);
                             }
                             credentials.msa_refresh = None;
                         },
                     }
                 },
                 auth::credentials::AuthStageWithData::MsaAccess(access) => {
+                    log::debug!("Auth Flow: MsaAccess");
+
                     match authenticator.authenticate_xbox(&access).await {
                         Ok(xbl) => {
                             credentials.xbl = Some(xbl);
@@ -446,13 +469,15 @@ impl BackendState {
                                 return Err(error.into());
                             }
                             if !matches!(error, XboxAuthenticateError::NonOkHttpStatus(StatusCode::UNAUTHORIZED)) {
-                                eprintln!("Error using msa access to get xbl token: {:?}", error);
+                                log::warn!("Error using msa access to get xbl token: {:?}", error);
                             }
                             credentials.msa_access = None;
                         },
                     }
                 },
                 auth::credentials::AuthStageWithData::XboxLive(xbl) => {
+                    log::debug!("Auth Flow: XboxLive");
+
                     match authenticator.obtain_xsts(&xbl).await {
                         Ok(xsts) => {
                             credentials.xsts = Some(xsts);
@@ -462,13 +487,15 @@ impl BackendState {
                                 return Err(error.into());
                             }
                             if !matches!(error, XboxAuthenticateError::NonOkHttpStatus(StatusCode::UNAUTHORIZED)) {
-                                eprintln!("Error using xbl to get xsts: {:?}", error);
+                                log::warn!("Error using xbl to get xsts: {:?}", error);
                             }
                             credentials.xbl = None;
                         },
                     }
                 },
                 auth::credentials::AuthStageWithData::XboxSecure { xsts, userhash } => {
+                    log::debug!("Auth Flow: XboxSecure");
+
                     match authenticator.authenticate_minecraft(&xsts, &userhash).await {
                         Ok(token) => {
                             credentials.access_token = Some(token);
@@ -478,13 +505,15 @@ impl BackendState {
                                 return Err(error.into());
                             }
                             if !matches!(error, XboxAuthenticateError::NonOkHttpStatus(StatusCode::UNAUTHORIZED)) {
-                                eprintln!("Error using xsts to get minecraft access token: {:?}", error);
+                                log::warn!("Error using xsts to get minecraft access token: {:?}", error);
                             }
                             credentials.xsts = None;
                         },
                     }
                 },
                 auth::credentials::AuthStageWithData::AccessToken(access_token) => {
+                    log::debug!("Auth Flow: AccessToken");
+
                     match authenticator.get_minecraft_profile(&access_token).await {
                         Ok(profile) => {
                             login_tracker.set_count(AUTH_STAGE_COUNT as usize + 1);
@@ -497,7 +526,7 @@ impl BackendState {
                                 return Err(error.into());
                             }
                             if !matches!(error, XboxAuthenticateError::NonOkHttpStatus(StatusCode::UNAUTHORIZED)) {
-                                eprintln!("Error using access token to get profile: {:?}", error);
+                                log::warn!("Error using access token to get profile: {:?}", error);
                             }
                             credentials.access_token = None;
                         },
@@ -508,6 +537,8 @@ impl BackendState {
     }
 
     pub fn update_profile_head(&self, profile: &MinecraftProfileResponse) {
+        log::info!("Updating profile head for {}", profile.id);
+
         let Some(skin) = profile.skins.iter().find(|skin| skin.state == SkinState::Active).cloned() else {
             return;
         };
@@ -541,15 +572,19 @@ impl BackendState {
         let http_client = self.http_client.clone();
 
         tokio::task::spawn(async move {
+            log::info!("Downloading skin from {}", skin_url);
             let Ok(response) = http_client.get(&*skin_url).send().await else {
+                log::warn!("Http error while requesting skin from {}", skin_url);
                 head_cache.write().insert(skin_url.clone(), HeadCacheEntry::Failed);
                 return;
             };
             let Ok(bytes) = response.bytes().await else {
+                log::warn!("Http error while downloading skin bytes from {}", skin_url);
                 head_cache.write().insert(skin_url.clone(), HeadCacheEntry::Failed);
                 return;
             };
             let Ok(mut image) = image::load_from_memory(&bytes) else {
+                log::warn!("Image load error for skin from {}", skin_url);
                 head_cache.write().insert(skin_url.clone(), HeadCacheEntry::Failed);
                 return;
             };
@@ -578,6 +613,8 @@ impl BackendState {
                     Vec::new()
                 }
             };
+
+            log::info!("Successfully downloaded skin from {}", skin_url);
 
             if accounts.is_empty() {
                 return;
@@ -645,6 +682,7 @@ impl BackendState {
                 };
                 let file_name = entry.file_name();
                 if file_name.to_string_lossy().starts_with(".pandora.") {
+                    log::trace!("Removing temporary mod file {:?}", &file_name);
                     _ = std::fs::remove_file(entry.path());
                 }
             }
@@ -802,18 +840,15 @@ impl BackendState {
             let mut file_watching = self.file_watching.write();
             if !instance.watching_dot_minecraft {
                 instance.watching_dot_minecraft = true;
-                if file_watching.watcher.watch(&instance.dot_minecraft_path, notify::RecursiveMode::NonRecursive).is_ok() {
-                    file_watching.watching.insert(instance.dot_minecraft_path.clone(), WatchTarget::InstanceDotMinecraftDir {
-                        id: instance.id,
-                    });
-                }
+                file_watching.watch_filesystem(instance.dot_minecraft_path.clone(), WatchTarget::InstanceDotMinecraftDir {
+                    id: instance.id,
+                });
             }
             if !instance.watching_server_dat {
                 instance.watching_server_dat = true;
-                let server_dat = instance.server_dat_path.clone();
-                if file_watching.watcher.watch(&server_dat, notify::RecursiveMode::NonRecursive).is_ok() {
-                    file_watching.watching.insert(server_dat.clone(), WatchTarget::ServersDat { id: instance.id });
-                }
+                file_watching.watch_filesystem(instance.server_dat_path.clone(), WatchTarget::ServersDat {
+                    id: instance.id,
+                });
             }
         }
 
@@ -835,19 +870,17 @@ impl BackendState {
             let mut file_watching = self.file_watching.write();
             if !instance.watching_dot_minecraft {
                 instance.watching_dot_minecraft = true;
-                if file_watching.watcher.watch(&instance.dot_minecraft_path, notify::RecursiveMode::NonRecursive).is_ok() {
-                    file_watching.watching.insert(instance.dot_minecraft_path.clone(), WatchTarget::InstanceDotMinecraftDir {
-                        id: instance.id,
-                    });
-                }
+                file_watching.watch_filesystem(instance.dot_minecraft_path.clone(), WatchTarget::InstanceDotMinecraftDir {
+                    id: instance.id,
+                });
             }
             let content_state = &mut instance.content_state[folder];
             if !content_state.watching_path {
                 content_state.watching_path = true;
-                let path = content_state.path.clone();
-                if file_watching.watcher.watch(&path, notify::RecursiveMode::NonRecursive).is_ok() {
-                    file_watching.watching.insert(path.clone(), WatchTarget::InstanceContentDir { id: instance.id, folder });
-                }
+                file_watching.watch_filesystem(content_state.path.clone(), WatchTarget::InstanceContentDir {
+                    id: instance.id,
+                    folder
+                });
             }
         }
 
@@ -878,18 +911,15 @@ impl BackendState {
             let mut file_watching = self.file_watching.write();
             if !instance.watching_dot_minecraft {
                 instance.watching_dot_minecraft = true;
-                if file_watching.watcher.watch(&instance.dot_minecraft_path, notify::RecursiveMode::NonRecursive).is_ok() {
-                    file_watching.watching.insert(instance.dot_minecraft_path.clone(), WatchTarget::InstanceDotMinecraftDir {
-                        id: instance.id,
-                    });
-                }
+                file_watching.watch_filesystem(instance.dot_minecraft_path.clone(), WatchTarget::InstanceDotMinecraftDir {
+                    id: instance.id,
+                });
             }
             if !instance.watching_saves_dir {
                 instance.watching_saves_dir = true;
-                let saves = instance.saves_path.clone();
-                if file_watching.watcher.watch(&saves, notify::RecursiveMode::NonRecursive).is_ok() {
-                    file_watching.watching.insert(saves.clone(), WatchTarget::InstanceSavesDir { id: instance.id });
-                }
+                file_watching.watch_filesystem(instance.saves_path.clone(), WatchTarget::InstanceSavesDir {
+                    id: instance.id,
+                });
             }
         }
 
@@ -903,11 +933,9 @@ impl BackendState {
 
             let mut file_watching = self.file_watching.write();
             for summary in worlds.iter() {
-                if file_watching.watcher.watch(&summary.level_path, notify::RecursiveMode::NonRecursive).is_ok() {
-                    file_watching.watching.insert(summary.level_path.clone(), WatchTarget::InstanceWorldDir {
-                        id,
-                    });
-                }
+                file_watching.watch_filesystem(summary.level_path.clone(), WatchTarget::InstanceWorldDir {
+                    id,
+                });
             }
         }
 
@@ -932,6 +960,7 @@ impl BackendState {
     }
 
     pub async fn create_instance(&self, name: &str, version: &str, loader: Loader) -> Option<PathBuf> {
+        log::info!("Creating instance {name}");
         if loader == Loader::Unknown {
             self.send.send_warning(format!("Unable to create instance, unknown loader"));
             return None;
@@ -949,7 +978,7 @@ impl BackendState {
             return None;
         }
 
-        self.watch_filesystem(&self.directories.instances_dir.clone(), WatchTarget::InstancesDir);
+        self.file_watching.write().watch_filesystem(self.directories.instances_dir.clone(), WatchTarget::InstancesDir);
 
         let instance_dir = self.directories.instances_dir.join(name);
 
@@ -1031,22 +1060,80 @@ impl BackendState {
 }
 
 impl BackendStateFileWatching {
-    pub fn try_watch_filesystem(&mut self, path: &Path, target: WatchTarget) -> bool {
-        if self.watcher.watch(path, notify::RecursiveMode::NonRecursive).is_err() {
-            return false;
-        }
-        self.watching.insert(path.into(), target);
-        true
-    }
+    pub fn watch_filesystem(&mut self, path: Arc<Path>, target: WatchTarget) {
+        let Ok(canonical) = path.canonicalize() else {
+            log::error!("Unable to watch {:?} because it could not be canonicalized", path);
+            return;
+        };
+        let canonical: Arc<Path> = if canonical == &*path {
+            log::debug!("Watching {:?} as {:?}", path, target);
+            path.clone()
+        } else {
+            log::debug!("Watching {:?} (real path {:?}) as {:?}", path, canonical, target);
+            canonical.into()
+        };
 
-    pub fn watch_filesystem(&mut self, path: &Path, target: WatchTarget, send: &FrontendHandle) {
-        if self.watcher.watch(path, notify::RecursiveMode::NonRecursive).is_err() {
-            if path.exists() {
-                send.send_error(format!("Unable to watch directory {:?}, launcher may be out of sync with files!", path));
-            }
+        if let Err(err) = self.watcher.watch(&path, notify::RecursiveMode::NonRecursive) {
+            log::error!("Unable to watch filesystem: {:?}", err);
             return;
         }
-        self.watching.insert(path.into(), target);
+        self.watching.insert(path.clone(), target);
+
+        if canonical != path {
+            self.symlink_src_to_links.entry(canonical.clone()).or_default().insert(path.clone());
+            self.symlink_link_to_src.insert(path, canonical);
+        }
+    }
+
+    pub fn get_target(&self, path: &Path) -> Option<&WatchTarget> {
+        self.watching.get(path)
+    }
+
+    pub fn remove(&mut self, path: &Path) -> Option<WatchTarget> {
+        if let Some(src) = self.symlink_link_to_src.remove(path) {
+            if let Some(links) = self.symlink_src_to_links.get_mut(&src) {
+                links.shift_remove(path);
+                if links.is_empty() {
+                    self.symlink_src_to_links.remove(&src);
+                }
+            }
+        }
+        self.watching.remove(path)
+    }
+
+    pub fn all_paths(&self, path: Arc<Path>) -> Vec<Arc<Path>> {
+        let mut paths = Vec::new();
+
+        if self.watching.contains_key(&path) {
+            paths.push(path.clone());
+        } else if let Some(parent) = path.parent() && self.watching.contains_key(parent) {
+            paths.push(path.clone());
+        }
+
+        if let Some(links) = self.symlink_src_to_links.get(&path) {
+            for link in links {
+                if self.watching.contains_key(link) {
+                    paths.push(link.clone());
+                } else if let Some(link_parent) = link.parent() && self.watching.contains_key(link_parent) {
+                    paths.push(link.clone());
+                }
+            }
+        }
+
+        if let Some(parent) = path.parent() && let Some(filename) = path.file_name() {
+            if let Some(links) = self.symlink_src_to_links.get(parent) {
+                for link_parent in links {
+                    let child_link: Arc<Path> = link_parent.join(filename).into();
+                    if self.watching.contains_key(&child_link) {
+                        paths.push(child_link.clone());
+                    } else if self.watching.contains_key(link_parent) {
+                        paths.push(child_link.clone());
+                    }
+                }
+            }
+        }
+
+        paths
     }
 }
 

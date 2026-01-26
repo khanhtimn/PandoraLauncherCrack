@@ -1,23 +1,25 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::{Arc, atomic::AtomicBool}};
 
-use bridge::message::{BridgeNotificationType, MessageToFrontend};
+use bridge::{instance::InstanceStatus, message::{BridgeNotificationType, MessageToFrontend}};
 use gpui::{px, size, AnyWindowHandle, App, AppContext, Entity, SharedString, TitlebarOptions, WindowDecorations, WindowHandle, WindowOptions};
 use gpui_component::{notification::{Notification, NotificationType}, Root, WindowExt};
 
-use crate::{entity::{account::AccountEntries, instance::InstanceEntries, metadata::FrontendMetadata, DataEntities}, game_output::{GameOutput, GameOutputRoot}};
+use crate::{entity::{DataEntities, account::AccountEntries, instance::InstanceEntries, metadata::FrontendMetadata}, game_output::{GameOutput, GameOutputRoot}, interface_config::InterfaceConfig};
 
 pub struct Processor {
     data: DataEntities,
     game_output_windows: HashMap<usize, (WindowHandle<Root>, Entity<GameOutput>)>,
-    main_window_handle: AnyWindowHandle
+    main_window_handle: Option<AnyWindowHandle>,
+    main_window_hidden: Arc<AtomicBool>,
 }
 
 impl Processor {
-    pub fn new(data: DataEntities, main_window_handle: AnyWindowHandle) -> Self {
+    pub fn new(data: DataEntities, main_window_handle: AnyWindowHandle, main_window_hidden: Arc<AtomicBool>) -> Self {
         Self {
             data,
             game_output_windows: HashMap::new(),
-            main_window_handle
+            main_window_handle: Some(main_window_handle),
+            main_window_hidden,
         }
     }
 
@@ -62,6 +64,22 @@ impl Processor {
                 configuration,
                 status,
             } => {
+                if status == InstanceStatus::Running {
+                    if InterfaceConfig::get(cx).hide_main_window_on_launch {
+                        if let Some(handle) = self.main_window_handle.take() {
+                            self.main_window_hidden.store(true, std::sync::atomic::Ordering::SeqCst);
+                            _ = handle.update(cx, |_, window, _| {
+                                window.remove_window();
+                            });
+                        }
+                    }
+                } else if status == InstanceStatus::NotRunning {
+                    if self.main_window_handle.is_none() && self.main_window_hidden.load(std::sync::atomic::Ordering::SeqCst) {
+                        self.main_window_handle = Some(crate::open_main_window(&self.data, None, cx));
+                        self.main_window_hidden.store(false, std::sync::atomic::Ordering::SeqCst);
+                    }
+                }
+
                 InstanceEntries::modify(
                     &self.data.instances,
                     id,
@@ -85,7 +103,10 @@ impl Processor {
                 InstanceEntries::set_resource_packs(&self.data.instances, id, resource_packs, cx);
             },
             MessageToFrontend::AddNotification { notification_type, message } => {
-                self.main_window_handle.update(cx, |_, window, cx| {
+                let Some(handle) = self.main_window_handle else {
+                    return;
+                };
+                _ = handle.update(cx, |_, window, cx| {
                     let notification_type = match notification_type {
                         BridgeNotificationType::Success => NotificationType::Success,
                         BridgeNotificationType::Info => NotificationType::Info,
@@ -97,15 +118,21 @@ impl Processor {
                         notification = notification.autohide(false);
                     }
                     window.push_notification(notification, cx);
-                }).unwrap();
+                });
             },
             MessageToFrontend::Refresh => {
-                _ = self.main_window_handle.update(cx, |_, window, _| {
+                let Some(handle) = self.main_window_handle else {
+                    return;
+                };
+                _ = handle.update(cx, |_, window, _| {
                     window.refresh();
                 });
             },
             MessageToFrontend::CloseModal => {
-                _ = self.main_window_handle.update(cx, |_, window, cx| {
+                let Some(handle) = self.main_window_handle else {
+                    return;
+                };
+                _ = handle.update(cx, |_, window, cx| {
                     window.close_all_dialogs(cx);
                 });
             },
